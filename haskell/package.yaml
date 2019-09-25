@@ -1,0 +1,57 @@
+name:                rppl
+version:             0.1.0.0
+github:              "githubuser/rppl"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2018 Author name here"
+
+extra-source-files:
+- README.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/rppl#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- random
+- random-source
+- random-fu
+- hmatrix
+- containers
+- math-functions
+- ad
+- mtl
+- writer-cps-mtl
+- monad-bayes
+- log-domain
+- vector
+- aeson
+- bytestring
+
+default-extensions:
+  - RankNTypes
+  - ScopedTypeVariables
+  - GADTs
+  - StandaloneDeriving
+
+library:
+  source-dirs: src
+  ghc-options: -fwarn-incomplete-patterns
+
+executables:
+  gaussiangaussian:
+    main:             test/GaussianGaussian.hs
+    source-dirs:      src
+  walker:
+    main:             test/Walker.hs
+    source-dirs:      src
+  delayedkalman:
+    main:             test/DelayedKalman.hs
+    source-dirs:      src
