@@ -3,31 +3,29 @@
 
 module Examples.SingleTargetTracking where
 
-import Control.Arrow hiding ((|||))
-import Control.Monad.Trans (MonadIO, liftIO, lift)
-import Control.Monad.Bayes.Class (MonadSample, MonadCond, logCategorical)
+import Control.Arrow (returnA)
+import Control.Monad.Trans (liftIO, lift)
+import Control.Monad.Bayes.Class (MonadSample)
 import Control.Monad.Bayes.Sampler (SamplerIO, sampleIO)
 
 import Data.Aeson (encode)
 import Data.Maybe (fromJust)
-
-import GHC.Generics (Generic)
 
 import qualified Data.ByteString.Lazy.Char8 as BS (putStrLn)
 
 import Numeric.LinearAlgebra.Static
 
 import Inference (zdsparticles, zunheap, zparticles)
-import DelayedSampling (MDistr (..), children, state, State, MarginalT (..), SMarginalT(..), distr, typeOfDSDistr, DelayedInfer)
-import qualified SymbolicDistr as DS
+import DelayedSampling (DelayedInfer)
+import qualified SymbolicDistr as DS (sample, mvNormal)
 import DSProg (DeepForce (..), Result (..), Expr' (..), Expr, marginal, zdeepForce, deepForce', zdeepForce')
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
-import Util.Ref (MonadState, Heap, emptyHeap, readRef)
+import Util.Ref (MonadState, Heap)
 
 import qualified Metaprob as MP
 
-import Examples.MultiTargetTracking (TrackG (..), MarginalTrack, Track, STrack)
+import Examples.MultiTargetTracking (TrackG (..))
 
 
 model :: MonadState Heap m => MonadSample m => Bool -> ZStream (MP.Gen m) () (Expr (R 6), Expr (R 3))
