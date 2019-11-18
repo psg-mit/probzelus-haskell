@@ -51,18 +51,16 @@ traced m = Gen
   , propose = \obs -> do
       proposedt <- traced (propose m obs)
       let (proposedtproposed, proposedtaux) = split_proposed_and_aux proposedt
-      return (M.union proposedt obs)
+      return (M.union proposedtproposed obs)
   , extend = \obs -> do
-  proposedt <- traced (extend m obs)
-  let (proposedtproposed, proposedtaux) = split_proposed_and_aux proposedt
-  return (M.union proposedt obs)
+      proposedt <- traced (extend m obs)
+      let (proposedtproposed, proposedtaux) = split_proposed_and_aux proposedt
+      return (M.union proposedtproposed obs)
   }
 
 split_proposed_and_aux :: Trace -> (Trace, Trace)
 split_proposed_and_aux t = (M.mapKeys (drop (length "proposed.")) proposed, aux) where
   (proposed, aux) = M.partitionWithKey (\k _ -> "proposed." `isPrefixOf` k) t
-
--- traced :: Gen m a -> Gen m Trace
 
 deriving instance Functor m => Functor (Gen m)
 
