@@ -2,6 +2,7 @@
 
 module MetaGen where
 
+import Control.Arrow (second)
 import Control.Monad.Bayes.Class
 import Control.Monad.Bayes.Weighted
 
@@ -31,7 +32,7 @@ instance Monoid Weight where
 -- logpdf_retval_and_trace, propose, and extend all ignore
 -- extra/irrelevant trace key-value pairs.
 data Gen m a = Gen
-  { sim :: m (Trace, a)
+  { simulate :: m (a, Trace)
   , logpdf_retval_and_trace :: Trace -> (a, Trace, Log Double)
   , propose :: Trace -> Gen m a
   , extend :: Trace -> Gen m a
@@ -40,12 +41,9 @@ data Gen m a = Gen
 logpdf :: Gen m a -> Trace -> Log Double
 logpdf model obs = let (_, _, w) = logpdf_retval_and_trace model obs in w
 
-simulate :: Functor m => Gen m a -> m a
-simulate = fmap snd . sim
-
 traced :: Monad m => Gen m a -> Gen m Trace
 traced m = Gen
-  { sim = (\(t, x) -> (t, t)) <$> sim m
+  { simulate = (\(x, t) -> (t, t)) <$> simulate m
   , logpdf_retval_and_trace = \obs -> let (x, t, w) = logpdf_retval_and_trace m obs in
       (t, t, w)
   , propose = \obs -> do
@@ -66,13 +64,13 @@ deriving instance Functor m => Functor (Gen m)
 
 instance Monad m => Applicative (Gen m) where
   pure x = Gen
-    { sim = pure (M.empty, x)
+    { simulate = pure (x, M.empty)
     , logpdf_retval_and_trace = \t -> (x, M.empty, 1)
     , propose = \t -> pure x
     , extend = \t -> pure x
     }
   f <*> x = Gen
-    { sim = (\(t, f') (t', x') -> (M.union t t', f' x')) <$> sim f <*> sim x
+    { simulate = (\(f', t) (x', t') -> (f' x', M.union t t')) <$> simulate f <*> simulate x
     , logpdf_retval_and_trace = \t ->
         let (f', t1, w1) = logpdf_retval_and_trace f t in
         let (x', t2, w2) = logpdf_retval_and_trace x t in
@@ -83,10 +81,10 @@ instance Monad m => Applicative (Gen m) where
 
 instance Monad m => Monad (Gen m) where
   x >>= f = Gen
-    { sim = do
-       (t, x') <- sim x
-       (t', y) <- sim (f x')
-       pure (M.union t t', y)
+    { simulate = do
+       (x', t) <- simulate x
+       (y, t') <- simulate (f x')
+       pure (y, M.union t t')
     , logpdf_retval_and_trace = \t ->
       let (x', tx, wx) = logpdf_retval_and_trace x t in
       let (y, tfx, wfx) = logpdf_retval_and_trace (f x') t in
@@ -101,11 +99,11 @@ instance Monad m => Monad (Gen m) where
 
 prim :: MonadSample m => Typeable a => Distr a -> Gen m a
 prim d = Gen
-  { sim = do
+  { simulate = do
     x <- D.sample d
-    return (traceFor x, x)
+    return (x, traceFor x)
   , logpdf_retval_and_trace = \t -> case M.lookup "" t >>= fromDynamic of
-      Nothing -> error "primitive not logpdf_retval_and_traced"
+      Nothing -> error "primitive not observed"
       Just x -> (x, traceFor x, Exp (D.score d x))
   , propose = proposeextend
   , extend = proposeextend
@@ -130,16 +128,18 @@ modifyingKeys keys = (to keys M.empty, from keys M.empty) where
     to ks (M.union t' (M.mapKeys ((subtr ++) . drop (length match)) matches)) dontmatch
   from ks = to (map (\(x, y) -> (y, x)) ks)
 
-at' :: (Trace -> Trace, Trace -> Trace) -> Gen m a -> Gen m a
+at' :: Functor m => (Trace -> Trace, Trace -> Trace) -> Gen m a -> Gen m a
 at' maps@(to, from) g = Gen
-  { sim = sim g
+  { simulate = second to <$> simulate g
   , logpdf_retval_and_trace = \t -> let (x, t', w) = logpdf_retval_and_trace g (to t) in
                       (x, from t', w)
+  -- propose and extend are broken. They need to interact properly with
+  -- :proposed, applying their transformations _underneath_ the :proposed.
   , propose = \t -> at' maps (propose g (to t))
   , extend = \t -> at' maps (extend g (to t))
   }
 
-(~~) :: [(String, String)] -> Gen m a -> Gen m a
+(~~) :: Functor m => [(String, String)] -> Gen m a -> Gen m a
 ks ~~ g = at' (modifyingKeys ks) g
 
 at :: String -> [(String, String)]
@@ -181,11 +181,11 @@ propose_with_density_estimate q = do
 
 -- observing :: MonadCond m => Trace -> Gen m a -> m a
 -- observing t g = do
---   (x, t, ll) <- sim (toInf g t)
+--   (x, t, ll) <- simulate (toInf g t)
 --   factor ll
 --   pure x
 
 -- observing' :: Monad m => Trace -> Gen m a -> Weighted m a
 -- observing' t g = withWeight $ do
---   (x, t, ll) <- sim (toInf g t)
+--   (x, t, ll) <- simulate (toInf g t)
 --   pure (x, ll)
