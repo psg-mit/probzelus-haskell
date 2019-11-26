@@ -5,6 +5,8 @@ import qualified Control.Monad.Bayes.Class as B
 import Control.Monad.Bayes.Class (MonadSample, MonadCond)
 import Numeric.SpecFunctions (logGamma)
 
+import qualified Data.Vector as V
+
 import Numeric.Log (Log (Exp))
 
 import SymbolicArithmetic
@@ -16,6 +18,9 @@ data Distr a = Distr
 
 factor :: MonadCond m => Double -> m ()
 factor = B.score . Numeric.Log.Exp
+
+negInf :: Double
+negInf = - 1 / 0
 
 observe :: MonadCond m => Distr a -> a -> m ()
 observe d x = factor (score d x)
@@ -98,6 +103,8 @@ normalEF = ExpFam
 normalNatParams :: Fractional d => d -> d -> [d]
 normalNatParams mu sigma2 = [mu / sigma2, -1 / (2 * sigma2)]
 
+dirac :: Eq a => a -> Distr a
+dirac x = Distr (return x) (\y -> if x == y then 0 else negInf)
 
 dot :: Num d => [d] -> [d] -> d
 dot xs ys = sum (zipWith (*) xs ys)
@@ -110,6 +117,9 @@ efToDistr ef naturalParams =
 
 bernoulli :: Double -> Distr Bool
 bernoulli p = Distr (B.bernoulli p) (\b -> bernoulli_ll p (if b then 1 else 0))
+
+categorical :: [Double] -> Distr Int
+categorical ps = Distr (B.categorical (V.fromList ps)) (\i -> ps !! i)
 
 bernoulli_ll :: Floating a => a -> a -> a
 bernoulli_ll p b = b * log p + (1 - b) * log (1 - p)
@@ -145,7 +155,6 @@ uniform a b = Distr (B.uniform a b) $ \x ->
     else negInf
   where
   range = b - a
-  negInf = - 1 / 0
 
 replicateNIID :: Int -> Distr a -> Distr [a]
 replicateNIID n d = Distr (replicateM n (sample d)) (\obs ->
