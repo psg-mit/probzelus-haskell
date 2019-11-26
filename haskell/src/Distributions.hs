@@ -183,6 +183,11 @@ geometric' = do
   x <- B.bernoulli (0.5 :: Double)
   if x then return 0 else fmap (+1) geometric'
 
+exponential :: MonadSample m => Double -> m Double
+exponential lambda = do
+  u <- B.random
+  pure (- log u / lambda)
+
 passert :: MonadCond m => Bool -> m ()
 passert True = pure ()
 passert False = B.score 0

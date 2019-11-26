@@ -21,7 +21,7 @@ ascend lr diff = go where
   go n x = let d = diff x in go (n - 1) (Seq.zipWith (+) x (fmap (lr *) d))
 
 -- find a *local* MAP via gradient descent
-runMAP' :: Monad m => Double -> Int -> Int -> Exp Int Double -> Seq Double -> PProg p a -> MStream m Double ()
+runMAP' :: Monad m => Double -> Int -> Int -> Exp Int Double -> Seq Double -> PProg a -> MStream m Double ()
 runMAP' lr numIters = go where
   go nvars e x Ret = pure ()
   go nvars e x (SampleThen d f) =
@@ -35,8 +35,8 @@ runMAP' lr numIters = go where
     go nvars e x' p'
   go nvars e x (FactorThen ll p') = go nvars (e + ll) x p'
 
-runMAP :: Monad m => Double -> Int -> PProg p a -> MStream m Double ()
+runMAP :: Monad m => Double -> Int -> PProg a -> MStream m Double ()
 runMAP lr numIters = runMAP' lr numIters 0 0 Seq.empty
 
-runModel :: PProg p a -> IO ()
+runModel :: PProg a -> IO ()
 runModel = void . runStream print . runMAP 1e-4 100

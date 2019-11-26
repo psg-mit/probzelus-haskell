@@ -65,11 +65,6 @@ normalize xs = map (\(x, w) -> (x, w / totalMass)) xs
   where
   totalMass = sum (map snd xs)
 
-exponential :: MonadSample m => Double -> m Double
-exponential lambda = do
-  u <- random
-  pure (- log u / lambda)
-
 importanceResampling :: RVar (a, Weight) -> Int -> RVar a
 importanceResampling x numSamples = do
   xs <- replicateM numSamples x

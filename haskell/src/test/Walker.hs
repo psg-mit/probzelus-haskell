@@ -64,7 +64,7 @@ initVelocity mt = case mt of
 motion :: MonadSample m => Double -> Walker -> m Walker
 motion dt w = do
   -- tTransition <- exponential (sum (map (recip . fst) transLam))
-  tTransition <- I.exponential (recip (sum (map (exp . ln . snd) transLam)))
+  tTransition <- D.exponential (recip (sum (map (exp . ln . snd) transLam)))
   if tTransition > dt
     then coast dt w
     else do

@@ -16,19 +16,26 @@ import Distributions
 import Util.Stream
 import SymbolicArithmetic
 
-data PProg p a where
-  Ret :: PProg p a
-  FactorThen :: Exp Int Double -> PProg p a -> PProg p a
-  YieldThen :: Exp Int Double -> PProg p a -> PProg p a
-  SampleThen :: (Exp Int a -> Exp Int Double) -> (Exp Int Double -> PProg p a) -> PProg p a
+data PProg a where
+  Ret :: PProg a
+  FactorThen :: Exp Int Double -> PProg a -> PProg a
+  YieldThen :: Exp Int Double -> PProg a -> PProg a
+  SampleThen :: (Exp Int a -> Exp Int Double) -> (Exp Int Double -> PProg a) -> PProg a
 
-factor :: Exp Int Double -> PProg p ()
+data PProg' a where
+  Ret' :: PProg' a
+  FactorThen' :: Exp Int Double -> PProg' a -> PProg' a
+  SampleThen' :: (Exp Int a -> Exp Int Double) -> (Exp Int Double -> PProg' a) -> PProg' a
+
+newtype SPProg a b = SPProg (a -> PProg' b)
+
+factor :: Exp Int Double -> PProg ()
 factor w = FactorThen w Ret
 
-pyield :: Exp Int Double -> PProg p ()
+pyield :: Exp Int Double -> PProg ()
 pyield p = YieldThen p Ret
 
-sample' :: (Exp Int a -> Exp Int Double) -> PProg p a
+sample' :: (Exp Int a -> Exp Int Double) -> PProg a
 sample' s = SampleThen s (\_ -> Ret)
 
 getVarFromProduct' :: (Num a, Eq env) => env -> [Exp env a] -> Maybe (Exp env a, [Exp env a])
@@ -83,7 +90,7 @@ getDist e i = do
     Left True -> Nothing
     Right y -> fmap (y :) (getRelevants xs)
 
-run' :: Monad m => Int -> Exp Int Double -> PProg p a -> MStream m (Maybe String) (Exp Int Double)
+run' :: Monad m => Int -> Exp Int Double -> PProg a -> MStream m (Maybe String) (Exp Int Double)
 run' nvars e Ret = return e
 run' nvars e (SampleThen d f) = run' (nvars + 1) (e + d (Var nvars)) (f (Var nvars))
 run' nvars e (YieldThen p x) = do
@@ -91,10 +98,10 @@ run' nvars e (YieldThen p x) = do
   run' nvars e x
 run' nvars e (FactorThen ll x) = run' nvars (e + ll) x
 
-run :: Monad m => PProg p a -> MStream m (Maybe String) (Exp Int Double)
+run :: Monad m => PProg a -> MStream m (Maybe String) (Exp Int Double)
 run = run' 0 0
 
-betaBernoulliModel :: PProg p Double
+betaBernoulliModel :: PProg Double
 betaBernoulliModel =
   SampleThen (beta_ll 1 1) $ step True
   where
@@ -103,7 +110,7 @@ betaBernoulliModel =
     FactorThen (bernoulli_ll p (if b then 1 else 0)) $
     step (not b) p
 
-gaussianGaussianModel :: PProg p Double
+gaussianGaussianModel :: PProg Double
 gaussianGaussianModel =
   SampleThen (gaussian_ll 0 100) $ step
   where
@@ -112,5 +119,5 @@ gaussianGaussianModel =
     FactorThen (gaussian_ll (2 * mu) 1 3.5) $
     step mu
 
-runModel :: PProg p Double -> IO ()
+runModel :: PProg Double -> IO ()
 runModel = void . runMStream (putStrLn . fromMaybe "Nothing") . run
