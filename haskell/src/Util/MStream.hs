@@ -5,6 +5,8 @@
 module Util.MStream where
 
 import Control.Monad (join)
+import Control.Monad.State (StateT)
+import qualified Control.Monad.State as S
 import System.IO (isEOF)
 
 data MStream f y a =
@@ -58,6 +60,14 @@ runStream act (Ret x) = pure x
 runStream act (Yield y x) = act y >> runStream act x
 runStream act (Act x) = x >>= runStream act
 
+runState :: Monad m => s -> MStream (StateT s m) a b -> MStream m a (s, b)
+runState st = go st where
+  go s (Ret x) = Ret (s, x)
+  go s (Yield y x) = Yield y (go s x)
+  go s (Act x) = Act $ do
+    (y, s') <- S.runStateT x s
+    pure (go s' y)
+
 stdinStream :: MStream IO Double ()
 stdinStream = do
   eof <- lift isEOF
@@ -84,6 +94,12 @@ step :: Monad m => MStream m y a -> m (Either (y, MStream m y a) a)
 step (Ret x) = pure (Right x)
 step (Yield y x) = pure (Left (y, x))
 step (Act x) = step =<< x
+
+mapyieldM :: Monad m => (y -> m y') -> MStream m y a -> MStream m y' a
+mapyieldM f (Ret x) = Ret x
+mapyieldM f (Yield y x) =
+  Act ((\y' -> Yield y' (mapyieldM f x)) <$> f y)
+mapyieldM f (Act x) = Act (mapyieldM f <$> x)
 
 stepUntil :: Monad m => (y -> Either y' ys) -> MStream m y a -> MStream m y' (Either (ys, MStream m y a) a)
 stepUntil f (Ret x) = Ret (Right x)

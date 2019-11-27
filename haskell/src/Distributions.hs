@@ -11,9 +11,11 @@ import Numeric.Log (Log (Exp))
 
 import SymbolicArithmetic
 
-data Distr a = Distr
+type Distr = Distr' Double
+
+data Distr' d a = Distr
   { sample :: forall m. MonadSample m => m a
-  , score :: a -> Double
+  , score :: a -> d
   }
 
 factor :: MonadCond m => Double -> m ()

@@ -1,7 +1,8 @@
-
+{-# LANGUAGE LambdaCase #-}
 
 module SymbolicLL where
 
+import Prelude
 import Data.Foldable (asum)
 import Data.List (partition)
 import Data.Maybe (fromMaybe)
@@ -9,34 +10,48 @@ import Data.IORef
 
 import Control.Arrow (second)
 import Control.Monad ((>=>), void)
+import Control.Monad.State
 
 import Debug.Trace (traceShow, trace)
 
-import Distributions
-import Util.Stream
+import Distributions hiding (factor)
+import Util.MStream hiding (Ret)
+import qualified Util.MStream as M
 import SymbolicArithmetic
 
 data PProg a where
-  Ret :: PProg a
+  Ret :: a -> PProg a
   FactorThen :: Exp Int Double -> PProg a -> PProg a
   YieldThen :: Exp Int Double -> PProg a -> PProg a
-  SampleThen :: (Exp Int a -> Exp Int Double) -> (Exp Int Double -> PProg a) -> PProg a
+  SampleThen :: (Exp Int a -> Exp Int Double) -> (Exp Int a -> PProg b) -> PProg b
+
+instance Functor PProg' where
+  fmap f (Ret' x) = Ret' (f x)
+  fmap f (FactorThen' w k) = FactorThen' w (fmap f k)
+  fmap f (SampleThen' d k) = SampleThen' d (fmap f . k)
+
+instance Applicative PProg' where
+  pure = Ret'
+  f <*> x = do
+    f' <- f
+    x' <- x
+    pure (f' x')
+
+instance Monad PProg' where
+  Ret' x >>= f = f x
+  FactorThen' w k >>= f = FactorThen' w (k >>= f)
+  SampleThen' d k >>= f = SampleThen' d (\x -> k x >>= f)
 
 data PProg' a where
-  Ret' :: PProg' a
+  Ret' :: a -> PProg' a
   FactorThen' :: Exp Int Double -> PProg' a -> PProg' a
-  SampleThen' :: (Exp Int a -> Exp Int Double) -> (Exp Int Double -> PProg' a) -> PProg' a
+  SampleThen' :: (Exp Int a -> Exp Int Double) -> (Exp Int a -> PProg' b) -> PProg' b
 
-newtype SPProg a b = SPProg (a -> PProg' b)
+factor :: Exp Int Double -> PProg' ()
+factor w = FactorThen' w $ Ret' ()
 
-factor :: Exp Int Double -> PProg ()
-factor w = FactorThen w Ret
-
-pyield :: Exp Int Double -> PProg ()
-pyield p = YieldThen p Ret
-
-sample' :: (Exp Int a -> Exp Int Double) -> PProg a
-sample' s = SampleThen s (\_ -> Ret)
+sample' :: (Exp Int a -> Exp Int Double) -> PProg' (Exp Int a)
+sample' s = SampleThen' s (\x -> Ret' x)
 
 getVarFromProduct' :: (Num a, Eq env) => env -> [Exp env a] -> Maybe (Exp env a, [Exp env a])
 getVarFromProduct' i es = case Data.List.partition (varIn i) es of
@@ -90,34 +105,56 @@ getDist e i = do
     Left True -> Nothing
     Right y -> fmap (y :) (getRelevants xs)
 
-run' :: Monad m => Int -> Exp Int Double -> PProg a -> MStream m (Maybe String) (Exp Int Double)
-run' nvars e Ret = return e
+run'' :: Monad m => PProg' a -> StateT (Int, Exp Int Double) m a
+run'' (Ret' x) = pure x
+run'' (SampleThen' d f) = do
+  (nvars, e) <- get
+  put (nvars + 1, e + d (Var nvars))
+  run'' (f (Var nvars))
+run'' (FactorThen' ll x) = do
+  modify (second (+ ll))
+  run'' x
+
+run2 :: Monad m => MStream PProg' (Exp Int Double) a -> MStream m (Maybe String) a
+run2 = apState . M.mapyieldM evalDist . M.liftM run'' where
+  apState :: Monad m => MStream (StateT (Int, Exp Int Double) m) (Maybe String) a -> MStream m (Maybe String) a
+  apState = fmap snd . M.runState (0, 0)
+  evalDist :: Monad m => Exp Int Double -> StateT (Int, Exp Int Double) m (Maybe String)
+  evalDist y = do
+    (_, e) <- get
+    pure (getDist e y)
+
+run' :: Monad m => Int -> Exp Int Double -> PProg a -> MStream m (Maybe String) a
+run' nvars e (Ret x) = pure x
 run' nvars e (SampleThen d f) = run' (nvars + 1) (e + d (Var nvars)) (f (Var nvars))
 run' nvars e (YieldThen p x) = do
   yield (getDist e p)
   run' nvars e x
 run' nvars e (FactorThen ll x) = run' nvars (e + ll) x
 
-run :: Monad m => PProg a -> MStream m (Maybe String) (Exp Int Double)
+run :: Monad m => PProg a -> MStream m (Maybe String) a
 run = run' 0 0
 
-betaBernoulliModel :: PProg Double
-betaBernoulliModel =
-  SampleThen (beta_ll 1 1) $ step True
+betaBernoulliModel :: MStream PProg' (Exp Int Double) Double
+betaBernoulliModel = do
+  p <- M.lift $ sample' (beta_ll 1 1)
+  step True p
   where
-  step b p =
-    YieldThen p $
-    FactorThen (bernoulli_ll p (if b then 1 else 0)) $
+  step b p = do
+    yield p
+    M.lift $ factor (bernoulli_ll p (if b then 1 else 0))
     step (not b) p
 
-gaussianGaussianModel :: PProg Double
-gaussianGaussianModel =
-  SampleThen (gaussian_ll 0 100) $ step
+gaussianGaussianModel :: MStream PProg' (Exp Int Double) Double
+gaussianGaussianModel = do
+  mu <- M.lift $ sample' (gaussian_ll 0 100)
+  step mu
   where
-  step mu =
-    YieldThen mu $
-    FactorThen (gaussian_ll (2 * mu) 1 3.5) $
+  step mu = do
+    yield mu
+    M.lift $ factor (gaussian_ll (2 * mu) 1 3.5)
     step mu
 
-runModel :: PProg Double -> IO ()
-runModel = void . runMStream (putStrLn . fromMaybe "Nothing") . run
+
+runModel :: MStream PProg' (Exp Int Double) Double -> IO ()
+runModel = void . runStream (putStrLn . fromMaybe "Nothing") . run2

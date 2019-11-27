@@ -19,7 +19,7 @@ import Numeric.LinearAlgebra.Static
 import qualified Numeric.LinearAlgebra.Data as LAD
 import Numeric.SpecFunctions (logGamma)
 
-import Distributions (Distr (..))
+import Distributions (Distr, Distr' (..))
 
 instance KnownNat n => ToJSON (R n) where
   toJSON x = toJSON (extract x :: LAD.Vector Double)
