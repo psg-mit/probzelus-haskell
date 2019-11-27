@@ -10,6 +10,7 @@ import Control.Arrow
 import Control.Category hiding ((.))
 import qualified Control.Category as C
 import Control.Monad.Fix
+import Control.Monad.State (StateT (..), runStateT, lift)
 import qualified Control.Monad.Trans as MT
 
 data ZStream f a b = ZStream { step :: a -> f (ZStream f a b, b) }
@@ -30,6 +31,12 @@ zconstM f = ZStream $ \a -> (\x -> (zconstM f, x)) <$> f a
 
 zconst :: Applicative f => (a -> b) -> ZStream f a b
 zconst f = zconstM (pure . f)
+
+runState :: Monad m => s -> ZStream (StateT s m) a b -> ZStream m a b
+runState initState (ZStream f) = fromStep step (f, initState) where
+  step (g, s) a = do
+    ((ZStream g', b), s') <- runStateT (g a) s
+    pure ((g', s'), b)
 
 delay :: Applicative f => a -> ZStream f a a
 delay = fromStep (\x a -> pure (a, x))

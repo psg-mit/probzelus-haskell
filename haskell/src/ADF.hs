@@ -5,8 +5,9 @@
 module ADF where
 
 import Control.Monad (replicateM, forM, void, (>=>))
-import Control.Monad.Bayes.Class
+import Control.Monad.Bayes.Class hiding (factor)
 import Control.Monad.Bayes.Sampler
+import Control.Monad.State
 import Control.Monad.Trans (liftIO)
 
 import Data.Maybe (catMaybes, maybeToList, fromMaybe)
@@ -20,16 +21,40 @@ import Debug.Trace
 
 import Numeric.Log (Log (Exp))
 
-import Distributions
+import Distributions hiding (factor)
 import Util.Numeric
-import Util.Stream
+import Util.MStream hiding (Ret)
+import qualified Util.MStream as M
 import SymbolicArithmetic
 
-data PProg p a where
-  Ret :: PProg p a
-  FactorThen :: Exp Int Double -> PProg p a -> PProg p a
-  YieldThen :: Exp Int Double -> PProg p a -> PProg p a
-  SampleThen :: ExpFam a -> [Double] -> (Exp Int a -> PProg p a) -> PProg p a
+data PProg a where
+  Ret :: a -> PProg a
+  FactorThen :: Exp Int Double -> PProg a -> PProg a
+  -- YieldThen :: Exp Int Double -> PProg p a -> PProg p a
+  SampleThen :: ExpFam a -> [Double] -> (Exp Int a -> PProg b) -> PProg b
+
+factor :: Exp Int Double -> PProg ()
+factor w = FactorThen w $ Ret ()
+
+sample' :: ExpFam a -> [Double] -> PProg (Exp Int a)
+sample' ef naturalParams = SampleThen ef naturalParams Ret
+
+instance Functor PProg where
+  fmap f (Ret x) = Ret (f x)
+  fmap f (FactorThen w k) = FactorThen w (fmap f k)
+  fmap f (SampleThen ef naturalParams k) = SampleThen ef naturalParams (fmap f . k)
+
+instance Applicative PProg where
+  pure = Ret
+  f <*> x = do
+    f' <- f
+    x' <- x
+    pure (f' x')
+
+instance Monad PProg where
+  Ret x >>= f = f x
+  FactorThen w k >>= f = FactorThen w (k >>= f)
+  SampleThen ef naturalParams k >>= f = SampleThen ef naturalParams (\x -> k x >>= f)
 
 getDist :: Seq (Some ExpFam, [Double]) -> Exp Int Double -> Maybe String
 getDist env p = do
@@ -118,40 +143,46 @@ mcUpdate env e = do
     return $ (eval ((values !!)) e, suffStatsvs)
 
 
-run' :: MonadSample m => Seq (Some ExpFam, [Double]) -> PProg p a -> MStream m (Maybe String) (Seq (Some ExpFam, [Double]))
-run' env Ret = return env
-run' env (SampleThen ef naturalParams f) =
-  let env' = env Seq.:|> (Some ef, naturalParams) in
-  run' env' (f (Var (length env)))
-run' env (YieldThen p x) = do
-  yield (getDist env p)
-  run' env x
-run' env (FactorThen ll x) = do
-  env' <- liftMStream $ update env ll
-  run' env' x
+run' :: MonadSample m => PProg a -> StateT (Seq (Some ExpFam, [Double])) m a
+run' (Ret x) = return x
+run' (SampleThen ef naturalParams f) = do
+  env <- get
+  let env' = env Seq.:|> (Some ef, naturalParams)
+  put env'
+  run' (f (Var (length env)))
+-- run' env (YieldThen p x) = do
+--   yield (getDist env p)
+--   run' env x
+run' (FactorThen ll x) = do
+  env <- get
+  env' <- update env ll
+  put env'
+  run' x
 
-run :: MonadSample m => PProg p a -> MStream m (Maybe String) (Seq (Some ExpFam, [Double]))
-run = run' Seq.empty
-
-gaussianGaussianModel :: PProg p Double
-gaussianGaussianModel =
-  SampleThen normalEF (normalNatParams 0 100) $ step
+gaussianGaussianModel :: MStream PProg (Exp Int Double) a
+gaussianGaussianModel = do
+  mu <- M.lift $ sample' normalEF (normalNatParams 0 100)
+  step mu
   where
-  step mu =
-    YieldThen mu $
-    FactorThen (gaussian_ll (2 * mu) 9 3.5) $
+  step mu = do
+    yield mu
+    M.lift $ factor (gaussian_ll (2 * mu) 9 3.5)
     step mu
 
-betaBernoulliModel :: PProg p Double
-betaBernoulliModel =
-  SampleThen betaEF [1,1] $ step True
+betaBernoulliModel :: MStream PProg (Exp Int Double) a
+betaBernoulliModel = do
+  p <- M.lift $ sample' betaEF [1,1]
+  step True p
   where
-  step b p =
-    YieldThen p $
-    FactorThen (bernoulli_ll p (if b then 1 else 0)) $
+  step b p = do
+    yield p
+    M.lift $ factor $ bernoulli_ll p (if b then 1 else 0)
     step (not b) p
 
 -- onlineLogisticRegression ::
 
-runModel :: PProg p Double -> IO ()
-runModel = void . sampleIO . runMStream (liftIO . putStrLn . fromMaybe "Nothing") . run
+run :: MonadSample m => MStream PProg (Exp Int Double) a -> MStream m (Maybe String) a
+run = undefined -- run' Seq.empty
+
+runModel :: MStream PProg (Exp Int Double) a -> IO ()
+runModel = void . sampleIO . M.runStream (liftIO . putStrLn . fromMaybe "Nothing") . run

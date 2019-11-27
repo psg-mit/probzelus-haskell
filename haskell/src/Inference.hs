@@ -107,14 +107,8 @@ zparticles' = fromStep $ \fs a -> do
 zparticles :: MonadSample m => Int -> ZStream (Weighted m) a b -> ZStream m a [b]
 zparticles numParticles = zparticles' . replicate numParticles
 
-zmergeState :: Monad m => s -> ZStream (StateT s m) a b -> ZStream m a b
-zmergeState initState (ZStream f) = fromStep step (f, initState) where
-  step (g, s) a = do
-    ((ZStream g', b), s') <- runStateT (g a) s
-    pure ((g', s'), b)
-
 zunheap :: Monad m => ZStream (StateT Heap m) a b -> ZStream m a b
-zunheap = zmergeState emptyHeap
+zunheap = ZS.runState emptyHeap
 
 zdsparticles :: MonadSample m => Int -> ZStream (StateT Heap (Weighted m)) a b -> ZStream m a [b]
 zdsparticles numParticles = zparticles numParticles . zunheap
