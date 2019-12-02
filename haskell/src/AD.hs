@@ -25,9 +25,9 @@ ascend lr diff = go where
   go n x = let d = diff x in go (n - 1) (Seq.zipWith (+) x (fmap (lr *) d))
 
 -- find a *local* MAP via gradient descent
-runMAP1 :: Monad m => PProg a -> StateT (Int, Exp Int Double, Seq Double) m a
+runMAP1 :: Monad m => PProg Int a -> StateT (Int, Exp Int Double, Seq Double) m a
 runMAP1 = go where
-  go :: Monad m => PProg a -> StateT (Int, Exp Int Double, Seq Double) m a
+  go :: Monad m => PProg Int a -> StateT (Int, Exp Int Double, Seq Double) m a
   go (Ret y) = pure y
   go (SampleThen d f) = do
     (nvars, e, x) <- get
@@ -49,7 +49,7 @@ evalDist y = do
   (_, _, x) <- get
   pure $ eval (x `Seq.index`) y
 
-runMAP :: Monad m => Double -> Int -> MStream PProg (Exp Int Double) a -> MStream m Double a
+runMAP :: Monad m => Double -> Int -> MStream (PProg Int) (Exp Int Double) a -> MStream m Double a
 runMAP lr numIters = apState . M.mapyieldM f . M.liftM runMAP1 where
   apState :: Monad m => MStream (StateT (Int, Exp Int Double, Seq Double) m) y a -> MStream m y a
   apState = fmap snd . M.runState (0, 0, Seq.empty)
@@ -58,14 +58,14 @@ runMAP lr numIters = apState . M.mapyieldM f . M.liftM runMAP1 where
     ascendStep lr numIters
     evalDist y
 
-runZ :: Monad m => Double -> Int -> ZStream PProg a b -> ZStream m a b
+runZ :: Monad m => Double -> Int -> ZStream (PProg Int) a b -> ZStream m a b
 runZ lr numIters = Z.runState (0, 0, Seq.empty) . Z.liftM f where
-  f :: Monad m => PProg a -> StateT (Int, Exp Int Double, Seq Double) m a
+  f :: Monad m => PProg Int a -> StateT (Int, Exp Int Double, Seq Double) m a
   f x = do
     y <- runMAP1 x
     ascendStep lr numIters
     pure y
 
 
-runModel :: MStream PProg (Exp Int Double) a -> IO ()
+runModel :: MStream (PProg Int) (Exp Int Double) a -> IO ()
 runModel = void . runStream print . runMAP 1e-4 100

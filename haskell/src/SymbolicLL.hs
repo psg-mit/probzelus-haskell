@@ -21,32 +21,32 @@ import Util.ZStream (ZStream)
 import qualified Util.ZStream as Z
 import SymbolicArithmetic
 
-data PProg a where
-  Ret :: a -> PProg a
-  FactorThen :: Exp Int Double -> PProg a -> PProg a
-  SampleThen :: (Exp Int a -> Exp Int Double) -> (Exp Int a -> PProg b) -> PProg b
+data PProg v a where
+  Ret :: a -> PProg v a
+  FactorThen :: Exp v Double -> PProg v a -> PProg v a
+  SampleThen :: (Exp v a -> Exp v Double) -> (Exp v a -> PProg v b) -> PProg v b
 
-instance Functor PProg where
+instance Functor (PProg v) where
   fmap f (Ret x) = Ret (f x)
   fmap f (FactorThen w k) = FactorThen w (fmap f k)
   fmap f (SampleThen d k) = SampleThen d (fmap f . k)
 
-instance Applicative PProg where
+instance Applicative (PProg v) where
   pure = Ret
   f <*> x = do
     f' <- f
     x' <- x
     pure (f' x')
 
-instance Monad PProg where
+instance Monad (PProg v) where
   Ret x >>= f = f x
   FactorThen w k >>= f = FactorThen w (k >>= f)
   SampleThen d k >>= f = SampleThen d (\x -> k x >>= f)
 
-factor :: Exp Int Double -> PProg ()
+factor :: Exp v Double -> PProg v ()
 factor w = FactorThen w $ Ret ()
 
-sample' :: (Exp Int a -> Exp Int Double) -> PProg (Exp Int a)
+sample' :: (Exp v a -> Exp v Double) -> PProg v (Exp v a)
 sample' s = SampleThen s (\x -> Ret x)
 
 getVarFromProduct' :: (Num a, Eq env) => env -> [Exp env a] -> Maybe (Exp env a, [Exp env a])
@@ -101,7 +101,7 @@ getDist e i = do
     Left True -> Nothing
     Right y -> fmap (y :) (getRelevants xs)
 
-run'' :: Monad m => PProg a -> StateT (Int, Exp Int Double) m a
+run'' :: Monad m => PProg Int a -> StateT (Int, Exp Int Double) m a
 run'' (Ret x) = pure x
 run'' (SampleThen d f) = do
   (nvars, e) <- get
@@ -111,7 +111,7 @@ run'' (FactorThen ll x) = do
   modify (second (+ ll))
   run'' x
 
-run :: Monad m => MStream PProg (Exp Int Double) a -> MStream m (Maybe String) a
+run :: Monad m => MStream (PProg Int) (Exp Int Double) a -> MStream m (Maybe String) a
 run = apState . M.mapyieldM evalDist . M.liftM run'' where
   apState :: Monad m => MStream (StateT (Int, Exp Int Double) m) (Maybe String) a -> MStream m (Maybe String) a
   apState = fmap snd . M.runState (0, 0)
@@ -120,10 +120,10 @@ run = apState . M.mapyieldM evalDist . M.liftM run'' where
     (_, e) <- get
     pure (getDist e y)
 
-runZ :: Monad m => ZStream PProg a b -> ZStream m a b
+runZ :: Monad m => ZStream (PProg Int) a b -> ZStream m a b
 runZ = Z.runState (0, 0) . Z.liftM run''
 
-betaBernoulliModel :: MStream PProg (Exp Int Double) a
+betaBernoulliModel :: MStream (PProg v) (Exp v Double) a
 betaBernoulliModel = do
   p <- M.lift $ sample' (beta_ll 1 1)
   step True p
@@ -133,7 +133,7 @@ betaBernoulliModel = do
     M.lift $ factor (bernoulli_ll p (if b then 1 else 0))
     step (not b) p
 
-gaussianGaussianModel :: MStream PProg (Exp Int Double) a
+gaussianGaussianModel :: MStream (PProg v) (Exp v Double) a
 gaussianGaussianModel = do
   mu <- M.lift $ sample' (gaussian_ll 0 100)
   step mu
@@ -144,5 +144,5 @@ gaussianGaussianModel = do
     step mu
 
 
-runModel :: MStream PProg (Exp Int Double) a -> IO ()
+runModel :: MStream (PProg Int) (Exp Int Double) a -> IO ()
 runModel = void . runStream (putStrLn . fromMaybe "Nothing") . run

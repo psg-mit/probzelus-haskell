@@ -13,7 +13,7 @@ import Control.Monad.Fix
 import Control.Monad.State (StateT (..), runStateT, lift)
 import qualified Control.Monad.Trans as MT
 
-data ZStream f a b = ZStream { step :: a -> f (ZStream f a b, b) }
+newtype ZStream f a b = ZStream { step :: a -> f (ZStream f a b, b) }
 
 deriving instance Functor f => Functor (ZStream f a)
 
