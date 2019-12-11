@@ -196,6 +196,7 @@ allCustomProposal nextTrackID allOldTracks allObservations = do
   newTrackLambda = birthRate * tdiff
   deathRate = 0.02
   survivalDist = bernoulli (exp (- tdiff * deathRate))
+  logFact n = logGamma (fromIntegral (n + 1))
 
   go (obs : observations) oldTracks newTracks survivedTracks nclutter tid = do
     newTrack <- newTrackD tid
@@ -217,7 +218,7 @@ allCustomProposal nextTrackID allOldTracks allObservations = do
     forM_ survivedTracks $ \_ -> observe survivalDist True
     observe (poisson clutterLambda) nclutter
     observe (poisson newTrackLambda) (length newTracks)
-    --  factor (- (logGamma (numTracks + numClutter + 1) - logGamma (numClutter + 1)))
+    factor (- (logFact (length allObservations + nclutter) - logFact nclutter))
     return (survivedTracks ++ newTracks, tid)
 
 
