@@ -71,14 +71,20 @@ at k g = Gen (sim g) $
   n = length k
   f = M.mapKeys (drop n) . M.filterWithKey (\k' _ -> and (zipWith (==) k k'))
 
+(~~) :: Monad m => String -> Gen m a -> Gen m a
+(~~) = at
 
-prim :: MonadSample m => Typeable a => Distr a -> Gen m a
-prim d = Gen (D.sample d) $ mkInf $ \obs ->
+fromSamplerAndScorer :: Typeable a => Monad m => m a -> (a -> Double) -> Gen m a
+fromSamplerAndScorer sampler scorer = Gen sampler $ mkInf $ \obs ->
   case M.lookup "" obs >>= fromDynamic of
-    Nothing -> sampled <$> prim d
-    Just x -> pure (x, M.singleton "" (toDyn x), Exp (D.score d x))
+    Nothing -> sampled <$> fromSamplerAndScorer sampler scorer
+    Just x -> pure (x, M.singleton "" (toDyn x), Exp (scorer x))
   where
   sampled x = (x, M.singleton "" (toDyn x), 1)
+
+
+prim :: MonadSample m => Typeable a => Distr a -> Gen m a
+prim d = fromSamplerAndScorer (D.sample d) (D.score d)
 
 dsPrim :: MonadState Heap m => MonadSample m => DeepForce a => Typeable a => Typeable (Forced a) => DS.Distr a -> Gen m a
 dsPrim d = Gen (DS.sample d) $ mkInf $ \obs ->
@@ -114,9 +120,11 @@ myGen = do
 tr :: Typeable a => String -> a -> Trace
 tr k v = M.singleton k (toDyn v)
 
+isequence :: Monad m => [Gen m a] -> Gen m [a]
+isequence xs = sequence [ at ("." ++ show i) x | (i, x) <- zip [0..] xs ]
+
 replicate :: Monad m => Int -> Gen m a -> Gen m [a]
-replicate n g =
-  sequence [ at ("." ++ show i) g | i <- [0..n-1] ]
+replicate n g = isequence (Prelude.replicate n g)
 
 trList :: Typeable a => String -> [a] -> Trace
 trList k xs = mconcat [ tr (k ++ "." ++ show i) x | (i, x) <- zip [0..] xs]
@@ -146,3 +154,9 @@ zobserving' (ZS.ZStream g) = ZS.fromStep step g
   step f (a, t) = withWeight $ do
     ((ZS.ZStream f, x), outt, ll) <- sim (toInf (f a) t)
     pure ((f, x), ll)
+
+exactly :: MonadSample m => Eq a => Typeable a => a -> Gen m a
+exactly x = prim (D.dirac x)
+
+exactly' :: MonadSample m => Typeable a => a -> Gen m a
+exactly' x = fromSamplerAndScorer (pure x) (error "Can't score")

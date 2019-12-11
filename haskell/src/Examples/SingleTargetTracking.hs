@@ -69,6 +69,6 @@ runInference delay numParticles = proc () -> do
 
 runExample :: Bool -> Int -> IO ()
 runExample delay n = sampleIO $ ZS.runStream (liftIO . BS.putStrLn . encode . f) (runInference delay n)
-  where f (gt, particles, obs) = ([Track gt 0 0], map (\x -> [Track x 0 0]) particles, [obs])
+  where f (gt, particles, obs) = ([Track gt 0], map (\x -> [Track x 0]) particles, [obs])
 
 simulate = zdeepForce . ZS.liftM MP.sim
