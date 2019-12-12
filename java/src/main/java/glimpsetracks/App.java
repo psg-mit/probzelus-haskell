@@ -332,7 +332,7 @@ public class App implements GlimpseLayoutProvider {
             Scanner input = new Scanner(System.in);
             int particlesId = -1;
             int observationsId = -2;
-            Track particlesTrack = new Track(particlesId, trackPainter, true, 0f, 0f, 0f, 0.2f);
+            Track particlesTrack = new Track(particlesId, trackPainter, true, 0f, 0f, 0f, 0.01f);
             trackPainter.setPointSize(particlesId, 10f);
             Track observationsTrack = new Track(observationsId, trackPainter, true, 1.0f, 0f, 0f, 0.6f);
             trackPainter.setPointSize(observationsId, 8f);
