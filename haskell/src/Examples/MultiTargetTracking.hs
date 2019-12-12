@@ -20,16 +20,18 @@ import GHC.Generics (Generic)
 import Numeric.LinearAlgebra.Static
 
 import Inference (zdsparticles)
-import DelayedSampling (DelayedInfer)
+import DelayedSampling (DelayedSample, DelayedInfer)
 import qualified SymbolicDistr as DS
 import DSProg (DeepForce (..), Result (..), Expr' (..), Expr, marginal, zdeepForce, deepForce')
-import Distributions (Distr, poisson, sample, observe, bernoulli, replicateIID, factor)
+import Distributions (Distr, bernoulli, poisson, sample, observe, factor)
 import MVDistributions (shuffleList)
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
 import Util.Ref (MonadState, Heap)
+import Util.Numeric (logFact)
 
-import Numeric.SpecFunctions (logGamma)
+pickN :: Int -> [a] -> (a, [a])
+pickN i xs = let (ys, (z : zs)) = splitAt i xs in (z, ys ++ zs)
 
 data TrackG pv = Track
   { posvel :: pv
@@ -59,49 +61,40 @@ survivalDist :: Distr Bool
 survivalDist = bernoulli (exp (- tdiff * deathRate))
 
 clutterDistr :: DS.Distr (Expr (R 3))
-clutterDistr = DS.mvNormal (Const (konst 0)) (10 * (sym eye))
+clutterDistr = DS.mvNormal (Const (0 :: R 3)) (10 * sym eye)
 
-newTrackD :: MonadState Heap m => MonadSample m => Int -> m STrack
+newTrackD :: DelayedSample m => Int -> m STrack
 newTrackD id = do
   pv <- DS.sample (DS.mvNormal (Const mu) cov)
-  pure (Track pv id)
+  return (Track pv id)
   where
   mu = konst 0 :: R 6
-  cov = posVelCovBlocks (sym eye :: Sym 3) (0.001 * sym eye :: Sym 3)
-  posVelCovBlocks :: Sym 3 -> Sym 3 -> Sym 6
-  posVelCovBlocks pcov vcov = sym $
-    ((unSym pcov ||| (konst 0 :: Sq 3))
-          ===
-    ((konst 0 :: Sq 3) ||| unSym vcov))
+  cov = sym (((eye :: Sq 3) ||| (0 :: Sq 3))
+            ===
+            ((0 :: Sq 3) ||| (0.001 * eye :: Sq 3)))
 
-trackMotion :: MonadState Heap m => MonadSample m => Double -> STrack -> m STrack
+trackMotion :: DelayedSample m => Double -> STrack -> m STrack
 trackMotion tdiff track = do
   pv' <- DS.sample (DS.mvNormal (MVMul (Const motionMatrix) (posvel track)) motionCov)
-  pure $ track { posvel = pv' }
+  return $ track { posvel = pv' }
   where
-  posCov = 0.01 * sym eye
-  velCov = 0.1 * sym eye
-  motionCov :: Sym 6
-  motionCov = sym $ konst tdiff * ((unSym posCov ||| (konst 0 :: Sq 3))
-                    ===
-                    ((konst 0 :: Sq 3) ||| unSym velCov))
   motionMatrix :: Sq 6
   motionMatrix = ((eye :: Sq 3) ||| (konst tdiff * eye :: Sq 3))
                  ===
-                 ((konst 0 :: Sq 3) ||| (eye :: Sq 3))
+                 ((0 :: Sq 3) ||| (eye :: Sq 3))
+  motionCov :: Sym 6
+  motionCov = sym $ konst tdiff * (((0.01 * eye :: Sq 3) ||| (0 :: Sq 3))
+                                  ===
+                                  ((0 :: Sq 3) ||| (0.1 * eye :: Sq 3)))
 
 trackMeasurement :: STrack -> DS.Distr (Expr (R 3))
 trackMeasurement track = DS.mvNormal (MVMul (Const posFromPosVel) (posvel track)) (sym eye)
   where
   posFromPosVel :: L 3 6
-  posFromPosVel = (eye :: Sq 3) ||| (konst 0 :: Sq 3)
+  posFromPosVel = (eye :: Sq 3) ||| (0 :: Sq 3)
 
-pickN :: Int -> [a] -> (a, [a])
-pickN i xs = let (ys, (z : zs)) = splitAt i xs in (z, ys ++ zs)
-
-allSample :: MonadState Heap m => MonadSample m =>
-  Int -> [STrack] -> m ([STrack], [Expr (R 3)], Int)
-allSample nextTrackID allOldTracks = do
+sampleStep :: DelayedSample m => Int -> [STrack] -> m ([STrack], [Expr (R 3)], Int)
+sampleStep nextTrackID allOldTracks = do
     survivedTracks <- catMaybes <$> (forM allOldTracks $ \t -> do
       survived <- sample survivalDist
       if survived
@@ -117,13 +110,11 @@ allSample nextTrackID allOldTracks = do
     return (tracks, allObservations, nextTrackID + numNewTracks)
 
 
-allCustomProposal :: DelayedInfer m => Int -> [STrack] -> [R 3] -> m ([STrack], Int)
-allCustomProposal nextTrackID allOldTracks allObservations = do
+observeStep :: DelayedInfer m => Int -> [STrack] -> [R 3] -> m ([STrack], Int)
+observeStep nextTrackID allOldTracks allObservations = do
     updatedOldTracks <- mapM (trackMotion tdiff) allOldTracks
     go allObservations updatedOldTracks [] [] 0 nextTrackID
   where
-  logFact n = logGamma (fromIntegral (n + 1))
-
   go (obs : observations) oldTracks newTracks survivedTracks nclutter tid = do
     newTrack <- newTrackD tid
     let distrs = clutterDistr : map trackMeasurement (newTrack : oldTracks)
@@ -146,29 +137,29 @@ allCustomProposal nextTrackID allOldTracks allObservations = do
     factor (- (logFact (length allObservations + nclutter) - logFact nclutter))
     return (survivedTracks ++ newTracks, tid)
 
-generateGroundTruth :: MonadState Heap m => MonadSample m => ZStream m () ([STrack], [Expr (R 3)])
+generateGroundTruth :: DelayedSample m => ZStream m () ([STrack], [Expr (R 3)])
 generateGroundTruth = ZS.fromStep stepf initState
   where
   initState :: ([TrackG pv], Int)
   initState = ([], 0)
   stepf (tracks, numTracks) () = do
-    (tracks', observations, numTracks') <- allSample numTracks tracks
+    (tracks', observations, numTracks') <- sampleStep numTracks tracks
     return ((tracks', numTracks'), (tracks', observations))
 
-processObservationsStream :: DelayedInfer m => ZStream m [R 3] [MarginalTrack]
-processObservationsStream = ZS.fromStep stepf initState where
+processObservations :: DelayedInfer m => ZStream m [R 3] [MarginalTrack]
+processObservations = ZS.fromStep stepf initState where
   initState = ([], 0)
   stepf (tracks, nextTrackID) obs = do
-    newState@(tracks', nextTrackID') <- allCustomProposal nextTrackID tracks obs
+    newState@(tracks', nextTrackID') <- observeStep nextTrackID tracks obs
     marginalTracks <- forM tracks' $ \track -> do
       Just pv <- marginal (posvel track)
-      pure $ track { posvel = pv }
+      return $ track { posvel = pv }
     return (newState, marginalTracks)
 
 runMTTPF :: Int -> ZStream SamplerIO () ([Track], [[MarginalTrack]], [R 3])
 runMTTPF numParticles = proc () -> do
   (groundTruth, obs) <- zdeepForce generateGroundTruth -< ()
-  particles <- zdsparticles numParticles processObservationsStream -< obs
+  particles <- zdsparticles numParticles processObservations -< obs
   returnA -< (groundTruth, particles, obs)
 
 runExample :: Bool -> Int -> IO ()

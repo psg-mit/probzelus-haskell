@@ -40,6 +40,7 @@ import Util.Ref
 data MarginalT = MGaussianT | MBetaT | MBernoulliT | forall (n :: Nat). MMVGaussianT (Proxy n)
 
 type DelayedSampling = MonadState Heap
+type DelayedSample m = (MonadState Heap m, MonadSample m)
 type DelayedInfer m = (MonadState Heap m, MonadInfer m)
 
 data SMarginalT (m :: MarginalT) where

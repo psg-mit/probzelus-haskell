@@ -2,6 +2,7 @@ module Util.Numeric where
 
 import Control.Arrow (second)
 import Numeric.Log
+import Numeric.SpecFunctions (logGamma)
 
 average :: Fractional a => [a] -> a
 average = go 0 0 where
@@ -24,3 +25,6 @@ weightedAverageGeneric :: Fractional a => (a -> b -> b) -> b -> (b -> b -> b) ->
 weightedAverageGeneric scale zero plus = go 0 zero where
   go w x [] = scale (recip w) x
   go w x ((y, ll) : ys) = go (w + ll) (scale ll y `plus` x) ys
+
+logFact :: Int -> Double
+logFact n = logGamma (fromIntegral (n + 1))
