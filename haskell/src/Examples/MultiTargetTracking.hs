@@ -25,7 +25,7 @@ import Inference (zdsparticles, zunheap)
 import DelayedSampling (MDistr (..), children, state, State, MarginalT (..), SMarginalT(..), distr, typeOfDSDistr, DelayedInfer)
 import qualified SymbolicDistr as DS
 import DSProg (DeepForce (..), Result (..), Expr' (..), Expr, marginal, zdeepForce, deepForce')
-import Distributions (poisson, sample, observe, bernoulli, replicateIID, passert, factor)
+import Distributions (Distr, poisson, sample, observe, bernoulli, replicateIID, passert, factor)
 import MVDistributions (shuffleList)
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
@@ -56,8 +56,18 @@ type STrack = TrackG (Expr (R 6))
 type Track = TrackG (R 6)
 type MarginalTrack = TrackG (Result (R 6))
 
-tdiff :: Double
+tdiff, birthRate, deathRate, clutterLambda, newTrackLambda :: Double
 tdiff = 1
+birthRate = 0.1
+deathRate = 0.02
+clutterLambda = 1
+newTrackLambda = birthRate * tdiff
+
+survivalDist :: Distr Bool
+survivalDist = bernoulli (exp (- tdiff * deathRate))
+
+clutterDistr :: DS.Distr (Expr (R 3))
+clutterDistr = DS.mvNormal (Const (konst 0)) (10 * (sym eye))
 
 newTrack :: MonadState Heap m => MonadSample m => Int -> MP.Gen m STrack
 newTrack id = do
@@ -96,8 +106,6 @@ trackSurvivalMotion tdiff track = do
   if survived
     then Just <$> "motion" MP.~~ trackMotion tdiff track
     else pure Nothing
-  where
-  deathRate = 0.02
 
 trackMeasurement :: STrack -> DS.Distr (Expr (R 3))
 trackMeasurement track = DS.mvNormal (MVMul (Const posFromPosVel) (posvel track)) (sym eye)
@@ -149,35 +157,25 @@ assocWithClutterCustomProposal cluttersD obsD allTracks allObservations = go all
 pickN :: Int -> [a] -> (a, [a])
 pickN i xs = let (ys, (z : zs)) = splitAt i xs in (z, ys ++ zs)
 
--- Naive association
 allSample :: MonadState Heap m => MonadSample m =>
-  (t -> m t')
-  -> Double
-  -> DS.Distr obs
-  -> Double
-  -> m t'
-  -> (t' -> DS.Distr obs)
-  -> [t]
-  -> [DSProg.Forced obs]
-  -> m ([t'], [obs])
-allSample trackMotion clutterLambda clutterD newTrackLambda newTrackD
-  obsD allOldTracks allObservations = do
+  Int -> [STrack] -> m ([STrack], [Expr (R 3)], Int)
+allSample nextTrackID allOldTracks = do
     survivedTracks <- catMaybes <$> (forM allOldTracks $ \t -> do
       survived <- sample survivalDist
       if survived
-        then Just <$> trackMotion t
+        then Just <$> MP.sim (trackMotion tdiff t)
         else return Nothing)
     nclutter <- sample (poisson clutterLambda)
-    clutter <- replicateM nclutter (DS.sample clutterD)
+    clutter <- replicateM nclutter (DS.sample clutterDistr)
     numNewTracks <- sample (poisson newTrackLambda)
-    newTracks <- replicateM numNewTracks newTrackD
+    newTracks <- forM (take numNewTracks (iterate (+1) nextTrackID)) newTrackD
     let tracks = survivedTracks ++ newTracks
-    observations <- mapM (DS.sample . obsD) tracks
+    observations <- mapM (DS.sample . trackMeasurement) tracks
     allObservations <- shuffleList (observations ++ clutter)
-    return (tracks, allObservations)
+    return (tracks, allObservations, nextTrackID + numNewTracks)
   where
-  deathRate = 0.02
-  survivalDist = bernoulli (exp (- tdiff * deathRate))
+  newTrackD = MP.sim . newTrack
+
 
 allCustomProposal :: (MonadInfer m, MonadState Util.Ref.Heap m) =>
      Int
@@ -188,19 +186,12 @@ allCustomProposal nextTrackID allOldTracks allObservations = do
     updatedOldTracks <- mapM (MP.sim . trackMotion tdiff) allOldTracks
     go allObservations updatedOldTracks [] [] 0 nextTrackID
   where
-  clutterLambda = 1
-  clutterD = DS.mvNormal (Const (konst 0)) (10 * (sym eye))
   newTrackD = MP.sim . newTrack
-  birthRate = 0.1
-  obsD = trackMeasurement
-  newTrackLambda = birthRate * tdiff
-  deathRate = 0.02
-  survivalDist = bernoulli (exp (- tdiff * deathRate))
   logFact n = logGamma (fromIntegral (n + 1))
 
   go (obs : observations) oldTracks newTracks survivedTracks nclutter tid = do
     newTrack <- newTrackD tid
-    let distrs = clutterD : map obsD (newTrack : oldTracks)
+    let distrs = clutterDistr : map trackMeasurement (newTrack : oldTracks)
     (clutterLL : newTrackLL : oldTrackLLs) <- map Exp <$> mapM (\d -> DS.score d obs) distrs
     let lls = Exp (log clutterLambda) * clutterLL : Exp (log newTrackLambda) * newTrackLL : oldTrackLLs
     let totalLL = sum lls
@@ -226,11 +217,7 @@ allCustomProposal nextTrackID allOldTracks allObservations = do
 tracksMeasurement :: [STrack] -> DS.Distr [Expr (R 3)]
 tracksMeasurement = associationWithClutter cluttersDistr trackMeasurement
   where
-  cluttersDistr = DS.replicateIID (poisson amtClutter) clutterDistr
-  amtClutter :: Double
-  amtClutter = 1
-  clutterDistr :: DS.Distr (Expr (R 3))
-  clutterDistr = DS.mvNormal (Const (konst 0)) (10 * (sym eye))
+  cluttersDistr = DS.replicateIID (poisson clutterLambda) clutterDistr
 
 tracksMotion :: MonadState Heap m => MonadSample m => Double -> [STrack] -> Int -> MP.Gen m ([STrack], Int)
 tracksMotion tdiff tracks numTracks = do
@@ -238,8 +225,6 @@ tracksMotion tdiff tracks numTracks = do
   numNewTracks <- "numNewTracks" MP.~~ MP.prim (poisson (birthRate * tdiff))
   newTracks <- "newTracks" MP.~~ MP.isequence [ (newTrack (numTracks + i)) | i <- [1..numNewTracks] ]
   pure (liveTracks ++ newTracks, numTracks + numNewTracks)
-  where
-  birthRate = 0.1
 
 -- Note how extraneous state about the number of tracks and the time is kept hidden
 zstepGen :: MonadState Heap m => MonadSample m => Bool -> ZStream (MP.Gen m) () ([STrack], [Expr (R 3)])
@@ -252,6 +237,15 @@ zstepGen delay = ZS.fromStep stepf initState
     (tracks', newNumTracks) <- lift (force (MP.sim (tracksMotion tdiff tracks numTracks)))
     observations <- "obs" MP.~~ (MP.dsPrim (tracksMeasurement tracks'))
     return ((t + tdiff, tracks', newNumTracks), (tracks', observations))
+
+zstep2 :: MonadState Heap m => MonadSample m => ZStream m () ([STrack], [Expr (R 3)])
+zstep2 = ZS.fromStep stepf initState
+  where
+  initState :: ([TrackG pv], Int)
+  initState = ([], 0)
+  stepf (tracks, numTracks) () = do
+    (tracks', observations, numTracks') <- allSample numTracks tracks
+    return ((tracks', numTracks'), (tracks', observations))
 
 processObservationsStream2 :: DelayedInfer m => Bool -> ZStream m [R 3] [MarginalTrack]
 processObservationsStream2 delay = ZS.fromStep stepf initState where
@@ -280,7 +274,7 @@ generateGroundTruth = ZS.liftM MP.sim (zstepGen True)
 
 runMTTPF :: Bool -> Int -> ZStream SamplerIO () ([Track], [[MarginalTrack]], [R 3])
 runMTTPF delay numParticles = proc () -> do
-  (groundTruth, obs) <- zdeepForce generateGroundTruth -< ()
+  (groundTruth, obs) <- zdeepForce zstep2 -< ()
   particles <- zdsparticles numParticles (processObservationsStream2 delay) -< obs
   returnA -< (groundTruth, particles, obs)
 
