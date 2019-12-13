@@ -23,7 +23,8 @@ import Inference (zdsparticles)
 import DelayedSampling (DelayedSample, DelayedInfer)
 import qualified SymbolicDistr as DS
 import DSProg (DeepForce (..), Result (..), Expr' (..), Expr, marginal, zdeepForce, deepForce')
-import Distributions (Distr, bernoulli, poisson, sample, observe, factor, randomlyInterleave)
+import Distributions (Distr, bernoulli, poisson, sample, observe, factor,
+  randomlyInterleave, randomlyInterleaveLogPDF, shuffleListLogPDF)
 import MVDistributions (shuffleList)
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
@@ -136,7 +137,8 @@ observeStep nextTrackID allOldTracks allObservations = do
     forM_ survivedTracks $ \_ -> observe survivalDist True
     observe (poisson clutterLambda) nclutter
     observe (poisson newTrackLambda) (length newTracks)
-    factor (- (logFact (length allObservations + nclutter) - logFact nclutter))
+    factor (shuffleListLogPDF (length survivedTracks))
+    factor (randomlyInterleaveLogPDF (nclutter : length newTracks : (map (\_ -> 1) survivedTracks)))
     return (survivedTracks ++ newTracks, tid)
 
 generateGroundTruth :: DelayedSample m => ZStream m () ([STrack], [Expr (R 3)])

@@ -10,6 +10,7 @@ import qualified Data.Vector as V
 import Numeric.Log (Log (Exp))
 
 import SymbolicArithmetic
+import Util.Numeric (logFact)
 
 type Distr = Distr' Double
 
@@ -65,8 +66,7 @@ logBeta :: Double -> Double -> Double
 logBeta a b = logGamma a + logGamma b - logGamma (a + b)
 
 logChoose :: Int -> Int -> Double
-logChoose n k = logFact n - logFact k - logFact (n - k) where
-  logFact i = logGamma (fromIntegral i + 1)
+logChoose n k = logFact n - logFact k - logFact (n - k)
 
 normalEF :: ExpFam Double
 normalEF = ExpFam
@@ -210,3 +210,12 @@ randomlyInterleave xs = if ntot == 0
   where
     ns = map length xs
     ntot = sum ns
+
+logNumPermutationsWithRepeats :: [Int] -> Double
+logNumPermutationsWithRepeats ns = logFact (sum ns) - sum [ logFact n | n <- ns ]
+
+randomlyInterleaveLogPDF :: [Int] -> Double
+randomlyInterleaveLogPDF ns = - logNumPermutationsWithRepeats ns
+
+shuffleListLogPDF :: Int -> Double
+shuffleListLogPDF n = - logFact n

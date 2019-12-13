@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-
 module SymbolicLL where
 
 import Prelude
