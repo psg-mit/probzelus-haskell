@@ -46,9 +46,6 @@ library:
   ghc-options: -fwarn-incomplete-patterns
 
 executables:
-  gaussiangaussian:
-    main:             test/GaussianGaussian.hs
-    source-dirs:      src
   walker:
     main:             test/Walker.hs
     source-dirs:      src
