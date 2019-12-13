@@ -50,8 +50,6 @@ probabilistic program (`PProg`).
 
 ## Multi-target tracking example
 
-Need to make this portable.
-
 ```
-stack exec examples mtt | ../java/run.sh App
+stack exec examples mtt | (cd ../java ; mvn exec:java -Dexec.mainClass=glimpsetracks.App)
 ```
