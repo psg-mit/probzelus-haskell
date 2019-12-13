@@ -46,9 +46,6 @@ library:
   ghc-options: -fwarn-incomplete-patterns
 
 executables:
-  walker:
-    main:             test/Walker.hs
-    source-dirs:      src
-  delayedkalman:
-    main:             test/DelayedKalman.hs
+  examples:
+    main:             test/Examples.hs
     source-dirs:      src

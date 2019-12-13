@@ -7,6 +7,7 @@ import DelayedSampling (delay_kalman)
 import qualified Examples.MultiTargetTracking as MTT
 import qualified Examples.SingleTargetTracking as STT
 import qualified ADF as ADF
+import qualified Examples.Walker as Walker
 
 nth :: Int -> [a] -> Maybe a
 nth _ []       = Nothing
@@ -20,6 +21,7 @@ main = do
     Just "mtt" -> MTT.runExample (maybe True Prelude.read (nth 1 args)) (maybe 100 Prelude.read (nth 2 args))
     Just "stt" -> STT.runExample (maybe True Prelude.read (nth 1 args)) (maybe 100 Prelude.read (nth 2 args))
     Just "gaussiangaussian" -> ADF.runModel ADF.gaussianGaussianModel
+    Just "walker" -> Walker.run
     _ -> void $ do
       let highLevel = maybe True Prelude.read (nth 0 args)
       let forgetb = maybe True Prelude.read (nth 1 args)

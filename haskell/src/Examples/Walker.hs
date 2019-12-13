@@ -1,3 +1,5 @@
+module Examples.Walker where
+
 import Control.Arrow (first)
 import Control.Monad (void)
 import Control.Monad.Trans (MonadIO (liftIO))
@@ -141,7 +143,7 @@ runOurFilter = void . MS.runStream (liftIO . print . summarize) . particles 1000
     averagingBoth f = (averaging (fst . f), averaging (snd . f))
     averaging f = average (map f ws)
 
-main :: IO ()
-main = sampleIO $ do
+run :: IO ()
+run = sampleIO $ do
   measurements <- generateWalker 1000
   runOurFilter $ walkerSimulate measurements

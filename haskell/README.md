@@ -26,7 +26,7 @@ probabilistic program (`PProg`).
 
 - `PProg.hs` - the "standard" black-box setting.
   Inference algorithms: particle filter (`runParticleFilter`),
-  importance sampler for computing Monte Carlo estimates 
+  importance sampler for computing Monte Carlo estimates
   of running expectations (`runImportanceSampling`),
   run a single weighted sample (`runOneWeightedSample`)
 - `SymbolicLL.hs` - compute a running log PDF of all sampled variables.
@@ -53,5 +53,5 @@ probabilistic program (`PProg`).
 Need to make this portable.
 
 ```
-stack exec delayedkalman mtt | ../java/run.sh App
+stack exec examples mtt | ../java/run.sh App
 ```
