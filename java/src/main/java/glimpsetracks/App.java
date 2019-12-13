@@ -49,6 +49,7 @@ import com.metsci.glimpse.layout.GlimpseLayout;
 import com.metsci.glimpse.layout.GlimpseLayoutProvider;
 import com.metsci.glimpse.painter.info.CursorTextPainter;
 import com.metsci.glimpse.painter.info.FpsPainter;
+import com.metsci.glimpse.painter.shape.PolygonPainter;
 import com.metsci.glimpse.painter.track.Point;
 import com.metsci.glimpse.painter.track.Pulsator;
 import com.metsci.glimpse.painter.track.TrackPainter;
@@ -98,9 +99,9 @@ public class App implements GlimpseLayoutProvider {
         plot.setMaxY(20.0);
 
         plot.setMinZ(0.0);
-        plot.setMaxZ(1000.0);
+        plot.setMaxZ(100.0);
         plot.setAxisSizeZ(65);
-        plot.getAxisZ().setSelectionCenter(1000.0);
+        plot.getAxisZ().setSelectionCenter(100.0);
 
         plot.getAxisX().setSelectionCenter(10);
         plot.getAxisY().setSelectionCenter(10);
@@ -119,6 +120,8 @@ public class App implements GlimpseLayoutProvider {
         // add a painter to manage and draw track data
         // final LineStripPainter trackPainter = new LineStripPainter( true );
         final TrackPainter trackPainter = new TrackPainter(true);
+        final PolygonPainter ellipsePainter = new PolygonPainter();
+        plot.addPainter(ellipsePainter);
         plot.addPainter(trackPainter);
 
         Font font = FontUtils.loadTrueTypeFont("fonts/bitstream/Vera.ttf", 12, Font.PLAIN);
@@ -126,11 +129,11 @@ public class App implements GlimpseLayoutProvider {
 
 
         // add a custom manager class to keep track of the tracks
-        TrackManager trackManager = new TrackManager(trackPainter, NUMBER_OF_TRACKS);
+        TrackManager trackManager = new TrackManager(trackPainter, ellipsePainter, NUMBER_OF_TRACKS);
 
         // add a custom listener to the z axis which changes the selected time range for
         // all GeoPlot tracks based on the min and max values of the z axis
-        plot.getAxisZ().addAxisListener(new TimeAxisListener(trackPainter));
+        plot.getAxisZ().addAxisListener(new TimeAxisListener(trackPainter, ellipsePainter));
         plot.getAxisPainterZ().setShowMarker(true);
 
         // start a thread which manages the animation, continually adding new points to
@@ -226,9 +229,11 @@ public class App implements GlimpseLayoutProvider {
         private long prevMaxTime = -1;
         private long prevSelectedTime = -1;
         private TrackPainter trackPainter;
+        private PolygonPainter ellipsePainter;
 
-        public TimeAxisListener(TrackPainter trackPainter) {
+        public TimeAxisListener(TrackPainter trackPainter, PolygonPainter ellipsePainter) {
             this.trackPainter = trackPainter;
+            this.ellipsePainter = ellipsePainter;
         }
 
         @Override
@@ -239,6 +244,7 @@ public class App implements GlimpseLayoutProvider {
 
             if (prevMinTime != minTime || prevMaxTime != maxTime || prevSelectedTime != selectedTime) {
                 trackPainter.displayTimeRange(minTime, maxTime, selectedTime);
+                ellipsePainter.displayTimeRange(minTime, maxTime);
 
                 prevMinTime = minTime;
                 prevMaxTime = maxTime;
@@ -321,9 +327,11 @@ public class App implements GlimpseLayoutProvider {
         private int time = 0;
         private Map<Object, Track> tracks;
         private TrackPainter trackPainter;
+        private PolygonPainter ellipsePainter;
 
-        public TrackManager(TrackPainter trackPainter, int numberOfTracks) {
+        public TrackManager(TrackPainter trackPainter, PolygonPainter ellipsePainter, int numberOfTracks) {
             this.trackPainter = trackPainter;
+            this.ellipsePainter = ellipsePainter;
             this.tracks = Collections.synchronizedMap(new HashMap<Object, Track>(numberOfTracks));
         }
 
@@ -332,11 +340,10 @@ public class App implements GlimpseLayoutProvider {
             Scanner input = new Scanner(System.in);
             int particlesId = -1;
             int observationsId = -2;
-            Track particlesTrack = new Track(particlesId, trackPainter, true, 0f, 0f, 0f, 0.01f);
+            Track particlesTrack = new Track(particlesId, trackPainter, ellipsePainter, true, 0f, 0f, 0f, 0.01f);
             trackPainter.setPointSize(particlesId, 10f);
-            Track observationsTrack = new Track(observationsId, trackPainter, true, 1.0f, 0f, 0f, 0.6f);
+            Track observationsTrack = new Track(observationsId, trackPainter, ellipsePainter, true, 1.0f, 0f, 0f, 0.6f);
             trackPainter.setPointSize(observationsId, 8f);
-            // System.out.println("Test1");
             while (input.hasNextLine()){
                 JSONArray arr = new JSONArray(input.nextLine());
                 JSONArray groundTruth = arr.getJSONArray(0);
@@ -353,7 +360,7 @@ public class App implements GlimpseLayoutProvider {
                         float r = ( float ) ( Math.random( ) * 0.5 + 0.0 );
                         float g = ( float ) ( Math.random( ) * 0.5 + 0.0 );
                         float b = ( float ) ( Math.random( ) * 0.5 + 0.3 );
-                        track = new Track(trackID, trackPainter, false, r, g, b, 0.6f);
+                        track = new Track(trackID, trackPainter, ellipsePainter, false, r, g, b, 0.6f);
                         tracks.put(trackID, track);
                         trackPainter.setHeadPointSize( trackID, 15.0f );
                         trackPainter.setHeadPointColor( trackID, new float[] { r, g, b, 1.0f } );
@@ -368,7 +375,13 @@ public class App implements GlimpseLayoutProvider {
                         JSONObject trackNode = particle.getJSONObject(j);
                         JSONArray posvel;
                         try {
-                        posvel = trackNode.getJSONObject("posvel").getJSONArray("mean");
+                            JSONObject pv = trackNode.getJSONObject("posvel");
+                            posvel = pv.getJSONArray("mean");
+                            JSONArray pvCov = pv.getJSONArray("cov");
+                            double xx = pvCov.getJSONArray(0).getDouble(0);
+                            double xy = pvCov.getJSONArray(0).getDouble(1);
+                            double yy = pvCov.getJSONArray(1).getDouble(1);
+                            particlesTrack.addUncertaintyEllipse(ellipsePainter, posvel.getDouble(0), posvel.getDouble(1), xx, xy, yy, time);
                         } catch (JSONException e) {
                             posvel = trackNode.getJSONArray("posvel");
                         }
@@ -394,7 +407,6 @@ public class App implements GlimpseLayoutProvider {
                 time++;
             }
             input.close();
-            System.out.println("Test2");
         }
 
         public Track getTrack( Object id )
@@ -408,13 +420,15 @@ public class App implements GlimpseLayoutProvider {
     {
         private int pointId;
         private int trackId;
+        private int polygonId;
 
         private float r, g, b, pointOpacity;
 
-        public Track( int i, TrackPainter trackPainter, boolean isParticle, float r, float g, float b, float pointOpacity)
+        public Track( int i, TrackPainter trackPainter, PolygonPainter ellipsePainter, boolean isParticle, float r, float g, float b, float pointOpacity)
         {
             this.trackId = i;
             this.pointId = 0;
+            this.polygonId = 0;
             this.r = r;
             this.g = g;
             this.b = b;
@@ -425,6 +439,10 @@ public class App implements GlimpseLayoutProvider {
             trackPainter.setLineStyle( i, style );
 
             this.setColor( trackPainter );
+            ellipsePainter.setShowLines(trackId, false);
+            ellipsePainter.setLineColor( trackId, r, g, b, pointOpacity);
+            ellipsePainter.setFill(trackId, true);
+            ellipsePainter.setFillColor( trackId, r, g, b, pointOpacity / 2f);
 
             trackPainter.setShowLines(i, ! isParticle);
 
@@ -436,7 +454,7 @@ public class App implements GlimpseLayoutProvider {
             trackPainter.setShowLabelLine( i, false );
         }
 
-        public void setColor( TrackPainter trackPainter )
+        public void setColor(TrackPainter trackPainter)
         {
             trackPainter.setLineColor( trackId, r, g, b, 0.6f );
             trackPainter.setPointColor( trackId, r, g, b, pointOpacity);
@@ -445,6 +463,25 @@ public class App implements GlimpseLayoutProvider {
         public void addPoint( TrackPainter trackPainter, double x, double y, long time )
         {
             trackPainter.addPoint( trackId, pointId++, x, y, time );
+        }
+
+        public void addUncertaintyEllipse(PolygonPainter ellipsePainter, double x, double y, double cxx, double cxy, double cyy, long time) {
+            // Cholesky decomposition
+            double xx = Math.sqrt(cxx);
+            double xy = cxy / xx;
+            double yy = Math.sqrt(cyy - xy * xy);
+
+            int n = 30;
+            float[] dataX = new float[n];
+            float[] dataY = new float[n];
+            for (int i = 0; i < n; i++) {
+                double theta = (2. * i * Math.PI) / n;
+                double costheta = Math.cos(theta);
+                double sintheta = Math.sin(theta);
+                dataX[i] = (float) (x + xx * costheta);
+                dataY[i] = (float) (y + xy * costheta + yy * sintheta);
+            }
+            ellipsePainter.addPolygon(trackId, polygonId++, time, time, dataX, dataY, 1000);
         }
     }
 }
