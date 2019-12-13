@@ -23,7 +23,7 @@ import Inference (zdsparticles)
 import DelayedSampling (DelayedSample, DelayedInfer)
 import qualified SymbolicDistr as DS
 import DSProg (DeepForce (..), Result (..), Expr' (..), Expr, marginal, zdeepForce, deepForce')
-import Distributions (Distr, bernoulli, poisson, sample, observe, factor)
+import Distributions (Distr, bernoulli, poisson, sample, observe, factor, randomlyInterleave)
 import MVDistributions (shuffleList)
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
@@ -54,7 +54,7 @@ tdiff, birthRate, deathRate, clutterLambda, newTrackLambda :: Double
 tdiff = 1
 birthRate = 0.1
 deathRate = 0.02
-clutterLambda = 1
+clutterLambda = 3
 newTrackLambda = birthRate * tdiff
 
 survivalDist :: Distr Bool
@@ -69,9 +69,9 @@ newTrackD id = do
   return (Track pv id)
   where
   mu = konst 0 :: R 6
-  cov = sym (((eye :: Sq 3) ||| (0 :: Sq 3))
+  cov = sym (((5 * eye :: Sq 3) ||| (0 :: Sq 3))
             ===
-            ((0 :: Sq 3) ||| (0.001 * eye :: Sq 3)))
+            ((0 :: Sq 3) ||| (0.1 * eye :: Sq 3)))
 
 trackMotion :: DelayedSample m => Double -> STrack -> m STrack
 trackMotion tdiff track = do
@@ -79,9 +79,10 @@ trackMotion tdiff track = do
   return $ track { posvel = pv' }
   where
   motionMatrix :: Sq 6
-  motionMatrix = ((eye :: Sq 3) ||| (konst tdiff * eye :: Sq 3))
-                 ===
-                 ((0 :: Sq 3) ||| (eye :: Sq 3))
+  motionMatrix = (eye :: Sq 6) + konst tdiff *
+    (((0 :: Sq 3) ||| (eye :: Sq 3))
+    ===
+    ((- 1 / 100 * eye :: Sq 3) ||| (-0.1 * eye :: Sq 3)))
   motionCov :: Sym 6
   motionCov = sym $ konst tdiff * (((0.01 * eye :: Sq 3) ||| (0 :: Sq 3))
                                   ===
@@ -100,14 +101,15 @@ sampleStep nextTrackID allOldTracks = do
       if survived
         then Just <$> trackMotion tdiff t
         else return Nothing)
-    nclutter <- sample (poisson clutterLambda)
-    clutter <- replicateM nclutter (DS.sample clutterDistr)
     numNewTracks <- sample (poisson newTrackLambda)
     newTracks <- forM (take numNewTracks (iterate (+1) nextTrackID)) newTrackD
-    let tracks = survivedTracks ++ newTracks
-    observations <- mapM (DS.sample . trackMeasurement) tracks
-    allObservations <- shuffleList (observations ++ clutter)
-    return (tracks, allObservations, nextTrackID + numNewTracks)
+    shuffledSurvivedTracks <- shuffleList survivedTracks
+    let tracks = newTracks : map (:[]) shuffledSurvivedTracks
+    nclutter <- sample (poisson clutterLambda)
+    let obsDists = replicate nclutter clutterDistr : map (map trackMeasurement) tracks
+    shuffledObsDists <- randomlyInterleave obsDists
+    observations <- mapM DS.sample shuffledObsDists
+    return (survivedTracks ++ newTracks, observations, nextTrackID + numNewTracks)
 
 
 observeStep :: DelayedInfer m => Int -> [STrack] -> [R 3] -> m ([STrack], Int)

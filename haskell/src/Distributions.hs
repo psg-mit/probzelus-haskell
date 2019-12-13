@@ -199,3 +199,14 @@ data Some f where
 
 exponentialFamilies :: [Some ExpFam]
 exponentialFamilies = [Some betaEF, Some bernoulliEF, Some normalEF]
+
+randomlyInterleave :: MonadSample m => [[a]] -> m [a]
+randomlyInterleave xs = if ntot == 0
+  then pure []
+  else do
+    i <- sample (categorical [ fromIntegral n / fromIntegral ntot | n <- ns ])
+    let (before, (v : vs) : after) = splitAt i xs
+    (v :) <$> randomlyInterleave (before ++ vs : after)
+  where
+    ns = map length xs
+    ntot = sum ns
