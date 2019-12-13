@@ -286,8 +286,19 @@ initializedMarginal nref = do
   case distr n of
     UDistr d -> pure d
     CDistr par cd -> do
-      pard <- initializedMarginal par
+      Just pard <- marginalRef par
       pure (makeMarginal pard cd)
+
+marginalRef :: MonadState Heap m => Ref (Node a b) -> m (Maybe (MDistr b))
+marginalRef nref = do
+  n <- readRef nref
+  case n of
+    RealizedNode x -> error "shouldn't occur"
+    _ -> case state n of
+      Marginalized d -> do
+        isStale <- stale nref
+        pure $ if isStale then Nothing else Just d
+      Initialized -> Just <$> initializedMarginal nref
 
 -- This is currently unsound
 -- Consider
