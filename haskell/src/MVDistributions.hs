@@ -102,14 +102,6 @@ kalmanUpdate z h r (x, p) =
 shuffleList :: MonadSample m => [a] ->  m [a]
 shuffleList xs = V.toList <$> shuffle (V.fromList xs)
 
-multiAssocBySampling :: MonadSample m => (st -> obs -> m (Double, st)) -> [st] -> [obs] -> m (Double, [st])
-multiAssocBySampling upd = f where
-  f st obs = do
-    obs' <- shuffleList obs
-    st' <- zipWithM upd st obs'
-    let (weights, sts) = unzip st'
-    return (sum weights, sts)
-
 printVector :: KnownNat n => R n -> IO ()
 printVector x = print (extract x)
 
