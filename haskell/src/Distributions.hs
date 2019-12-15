@@ -11,6 +11,7 @@ import Numeric.Log (Log (Exp))
 
 import SymbolicArithmetic
 import Util.Numeric (logFact)
+import Util.Bijection
 
 type Distr = Distr' Double
 
@@ -18,6 +19,10 @@ data Distr' d a = Distr
   { sample :: forall m. MonadSample m => m a
   , score :: a -> d
   }
+
+mapOutputDiscrete :: Bijection a b -> Distr' d a -> Distr' d b
+mapOutputDiscrete (Bijection to from) (Distr sample score) =
+  Distr (to <$> sample) (score . from)
 
 factor :: MonadCond m => Double -> m ()
 factor = B.score . Numeric.Log.Exp
@@ -120,6 +125,16 @@ efToDistr ef naturalParams =
 bernoulli :: Double -> Distr Bool
 bernoulli p = Distr (B.bernoulli p) (\b -> bernoulli_ll p (if b then 1 else 0))
 
+bernoulli01 :: Double -> Distr Int
+bernoulli01 p = Distr sam sco where
+  sam :: MonadSample m => m Int
+  sam = do
+    b <- B.bernoulli p
+    return (if b then 1 else 0)
+  sco 1 = log p
+  sco 0 = log (1 - p)
+  sco _ = negInf
+
 categorical :: [Double] -> Distr Int
 categorical ps = Distr (B.categorical (V.fromList ps)) (\i -> ps !! i)
 
@@ -199,6 +214,16 @@ data Some f where
 
 exponentialFamilies :: [Some ExpFam]
 exponentialFamilies = [Some betaEF, Some bernoulliEF, Some normalEF]
+
+shuffleWithRepeats :: [Distr Int] -> Distr [Int]
+shuffleWithRepeats countDistrs = Distr sam sco where
+  sam :: MonadSample m => m [Int]
+  sam = do
+    counts <- mapM sample countDistrs
+    randomlyInterleave [ replicate n i | (i, n) <- zip [0..] counts ]
+  sco :: [Int] -> Double
+  sco idxes = let ns = [ length (filter (== i) idxes) | i <- take (length countDistrs) [0..] ] in
+    sum (zipWith score countDistrs ns) + randomlyInterleaveLogPDF ns
 
 randomlyInterleave :: MonadSample m => [[a]] -> m [a]
 randomlyInterleave xs = if ntot == 0

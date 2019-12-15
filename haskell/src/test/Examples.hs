@@ -18,7 +18,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case nth 0 args of
-    Just "mtt" -> MTT.runExample (maybe True Prelude.read (nth 1 args)) (maybe 100 Prelude.read (nth 2 args))
+    Just "mtt" -> MTT.runExample (maybe 100 Prelude.read (nth 1 args))
     Just "stt" -> STT.runExample (maybe True Prelude.read (nth 1 args)) (maybe 100 Prelude.read (nth 2 args))
     Just "gaussiangaussian" -> ADF.runModel ADF.gaussianGaussianModel
     Just "walker" -> Walker.run
