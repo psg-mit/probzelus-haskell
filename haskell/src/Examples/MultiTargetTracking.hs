@@ -53,15 +53,17 @@ type STrack = TrackG (Expr (R 4))
 type Track = TrackG (R 4)
 type MarginalTrack = TrackG (Result (R 4))
 
-tdiff, birthRate, deathRate, clutterLambda, newTrackLambda :: Double
+tdiff, birthRate, deathRate, clutterLambda, newTrackLambda, pd, survivalProb :: Double
 tdiff = 1
 birthRate = 0.1
 deathRate = 0.02
 clutterLambda = 3
 newTrackLambda = birthRate * tdiff
+pd = 0.8
+survivalProb = exp (- tdiff * deathRate)
 
-survivalDist :: Distr Int
-survivalDist = bernoulli01 (exp (- tdiff * deathRate))
+probMeasurement :: Distr Int
+probMeasurement = bernoulli01 (survivalProb * pd)
 
 clutterDistr :: DS.Distr (Expr (R 2))
 clutterDistr = DS.mvNormal (Const (0 :: R 2)) (10 * sym eye)
@@ -97,16 +99,15 @@ trackMeasurement posvel = DS.mvNormal (MVMul (Const posFromPosVel) posvel) (sym 
 
 shufflingDistr :: [STrack] -> Distr [Int]
 shufflingDistr updatedOldTracks = shuffleWithRepeats $
-  poisson clutterLambda : poisson newTrackLambda : map (\_ -> survivalDist) updatedOldTracks
+  poisson clutterLambda : poisson newTrackLambda : map (\_ -> probMeasurement) updatedOldTracks
 
 updateWithAssocs :: DelayedSample m => Int -> [STrack] -> [Int] -> m (([STrack], Int), [DS.Distr (Expr (R 2))])
 updateWithAssocs nextTrackID updatedOldTracks allAssocs = go [] [] [] allAssocs
   where
   go obsDists newTrackPVs survivedTracks assocs = case assocs of
     [] -> do
-      let coasted = []
-      -- let notObserved = filter (\(i, _) -> not (i `elem` allAssocs)) (zip [2..] updatedOldTracks)
-      -- coasted <- filterM (\_ -> sample (bernoulli 0.1)) (map snd notObserved)
+      let notObserved = filter (\(i, _) -> not (i `elem` allAssocs)) (zip [2..] updatedOldTracks)
+      coasted <- filterM (\_ -> sample (bernoulli ((1 - pd) / (1 - survivalProb * pd)))) (map snd notObserved)
       return ((survivedTracks ++ coasted ++ zipWith Track newTrackPVs [nextTrackID..], nextTrackID + length newTrackPVs), obsDists)
     i : is -> case i of
       0 -> go (clutterDistr : obsDists) newTrackPVs survivedTracks is
