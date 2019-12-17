@@ -5,13 +5,8 @@ module Examples.MultiTargetTracking where
 
 import Control.Arrow (returnA)
 import Control.Monad (forM)
-import Control.Monad.Trans (liftIO, lift)
-import Control.Monad.Bayes.Class (MonadSample, categorical, MonadInfer)
-import Control.Monad.Bayes.Sampler (SamplerIO, sampleIO)
+import Control.Monad.Bayes.Class (MonadSample, MonadInfer)
 
-import Data.Aeson (ToJSON, encode)
-import qualified Data.ByteString.Lazy.Char8 as BS (putStrLn)
-import Data.List (partition)
 import qualified Data.Map as M
 import Data.Maybe (fromJust)
 
@@ -24,14 +19,14 @@ import DSProg (DeepForce (..), Expr' (..), Expr, marginal, zdeepForce, deepForce
 import Distributions
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
-import Metaprob ((~~), Gen)
+import Metaprob ((~~), Gen, lift)
 import qualified Metaprob as MP
 
 data ObsType = Clutter | NewTrack | Track Int
   deriving (Eq, Show, Ord)
 
-mapFilterM :: Monad m => (k -> v -> m Bool) -> M.Map k v -> m (M.Map k v)
-mapFilterM f = M.traverseMaybeWithKey $ \k v -> do
+filterM :: Monad m => (k -> v -> m Bool) -> M.Map k v -> m (M.Map k v)
+filterM f = M.traverseMaybeWithKey $ \k v -> do
   b <- f k v
   return (if b then Just v else Nothing)
 
@@ -79,12 +74,6 @@ trackMeasurement posvel = DS.mvNormal (MVMul (Const posFromPosVel) posvel) (sym 
   posFromPosVel :: L 2 4
   posFromPosVel = (eye :: Sq 2) ||| (0 :: Sq 2)
 
-shufflingDistr :: TrackMap -> Distr [ObsType]
-shufflingDistr updatedOldTracks = shuffleWithRepeats' $
-     M.singleton Clutter (poisson clutterLambda)
-  <> M.singleton NewTrack (poisson newTrackLambda)
-  <> M.mapKeys Track (fmap (\_ -> probMeasurement) updatedOldTracks)
-
 updateWithAssocs :: DelayedSample m => Int -> TrackMap -> [ObsType] -> m ((TrackMap, Int), [DS.Distr (Expr (R 2))])
 updateWithAssocs nextTrackID updatedOldTracks assocs = do
   (obsDists, newTrackPVs) <- fmap mconcat . forM assocs $ \k -> case k of
@@ -93,7 +82,7 @@ updateWithAssocs nextTrackID updatedOldTracks assocs = do
       newTrackPV <- newTrackD
       return ([trackMeasurement newTrackPV], [newTrackPV])
     Track i -> return ([trackMeasurement (updatedOldTracks M.! i)], [])
-  coasted <- mapFilterM (\_ _ -> sample (bernoulli ((1 - pd) / (1 - survivalProb * pd)))) notObserved
+  coasted <- filterM (\_ _ -> sample (bernoulli ((1 - pd) / (1 - survivalProb * pd)))) notObserved
   return ((mconcat (observed : coasted : zipWith M.singleton [nextTrackID..] newTrackPVs),
            nextTrackID + length newTrackPVs), obsDists)
   where
@@ -102,10 +91,14 @@ updateWithAssocs nextTrackID updatedOldTracks assocs = do
 sampleStep :: DelayedSample m => (TrackMap, Int) -> Gen m ((TrackMap, Int), [Expr (R 2)])
 sampleStep (allOldTracks, nextTrackID) = do
   updatedOldTracks <- lift (mapM (trackMotion tdiff) allOldTracks)
-  assocs <- "assocs" ~~ MP.prim (shufflingDistr updatedOldTracks)
+  assocs <- "assocs" ~~ MP.prim (shuffleWithRepeats' countDistrs)
   (newTrackInfo, obsDists) <- lift (updateWithAssocs nextTrackID updatedOldTracks assocs)
   observations <- "observations" ~~ MP.isequence (map MP.dsPrim obsDists)
   return (newTrackInfo, observations)
+  where
+  countDistrs = M.singleton Clutter (poisson clutterLambda)
+             <> M.singleton NewTrack (poisson newTrackLambda)
+             <> M.mapKeys Track (fmap (\_ -> probMeasurement) allOldTracks)
 
 observeStep :: DelayedInfer m => (TrackMap, Int) -> [R 2] -> m ((TrackMap, Int), [Expr (R 2)])
 observeStep (allOldTracks, nextTrackID) observations = do
@@ -117,10 +110,10 @@ observeStep (allOldTracks, nextTrackID) observations = do
 proposeAssocs :: DelayedInfer m => [R 2] -> TrackMap -> m [ObsType]
 proposeAssocs (obs : observations) remainingTracks = do
   newTrack <- newTrackD
-  let distrs = M.singleton Clutter clutterDistr <> M.singleton NewTrack (trackMeasurement newTrack)
-        <> M.mapKeys Track (fmap trackMeasurement remainingTracks)
-  let intensity i = case i of { Clutter -> clutterLambda ; NewTrack -> newTrackLambda ; Track _ -> survivalProb * pd }
-  likes <- M.traverseWithKey (\i d -> (\ll -> intensity i * exp ll) <$> DS.score d obs) distrs
+  let distrs = M.singleton Clutter (clutterLambda, clutterDistr)
+        <> M.singleton NewTrack (newTrackLambda, trackMeasurement newTrack)
+        <> M.mapKeys Track (fmap (\t -> (survivalProb * pd, trackMeasurement t)) remainingTracks)
+  likes <- mapM (\(intensity, d) -> (\ll -> intensity * exp ll) <$> DS.score d obs) distrs
   let probs = fmap (/ sum likes) likes
   i <- sample (categoricalM probs)
   factor (- score (categoricalM probs) i) -- proposal correction
@@ -145,11 +138,8 @@ processObservations = ZS.fromStep stepf initState where
     marginalTracks <- mapM (fmap fromJust . marginal) tracks'
     return (newState, marginalTracks)
 
-runMTTPF :: Int -> ZStream SamplerIO () ([(Int, R 4)], [[(Int, Result (R 4))]], [R 2])
+runMTTPF :: MonadSample m => Int -> ZStream m () ([(Int, R 4)], [[(Int, Result (R 4))]], [R 2])
 runMTTPF numParticles = proc () -> do
   (groundTruth, obs) <- zdeepForce generateGroundTruth -< ()
   particles <- zdsparticles numParticles processObservations -< obs
   returnA -< (M.assocs groundTruth, map M.assocs particles, obs)
-
-runExample :: Int -> IO ()
-runExample n = sampleIO $ ZS.runStream (liftIO . BS.putStrLn . encode) (runMTTPF n)
