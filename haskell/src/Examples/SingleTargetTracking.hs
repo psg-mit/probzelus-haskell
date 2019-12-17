@@ -16,17 +16,14 @@ import qualified Data.ByteString.Lazy.Char8 as BS (putStrLn)
 import Numeric.LinearAlgebra.Static
 
 import Inference (zdsparticles, zunheap, zparticles)
-import DelayedSampling (DelayedInfer)
+import DelayedSampling (DelayedInfer, Result (..))
 import qualified SymbolicDistr as DS (sample, mvNormal)
-import DSProg (DeepForce (..), Result (..), Expr' (..), Expr, marginal, zdeepForce, deepForce', zdeepForce')
+import DSProg (DeepForce (..), Expr' (..), Expr, marginal, zdeepForce, deepForce', zdeepForce')
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
 import Util.Ref (MonadState, Heap)
 
 import qualified Metaprob as MP
-
-import Examples.MultiTargetTracking (TrackG (..))
-
 
 model :: MonadState Heap m => MonadSample m => Bool -> ZStream (MP.Gen m) () (Expr (R 6), Expr (R 3))
 model delay = ZS.fromStep step initPosVel
@@ -69,6 +66,6 @@ runInference delay numParticles = proc () -> do
 
 runExample :: Bool -> Int -> IO ()
 runExample delay n = sampleIO $ ZS.runStream (liftIO . BS.putStrLn . encode . f) (runInference delay n)
-  where f (gt, particles, obs) = ([Track gt 0], map (\x -> [Track x 0]) particles, [obs])
+  where f (gt, particles, obs) = ([(0 :: Int, gt)], map (\x -> [(0 :: Int, x)]) particles, [obs])
 
 simulate = zdeepForce . ZS.liftM MP.sim

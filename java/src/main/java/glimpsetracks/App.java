@@ -348,9 +348,9 @@ public class App implements GlimpseLayoutProvider {
                 JSONArray arr = new JSONArray(input.nextLine());
                 JSONArray groundTruth = arr.getJSONArray(0);
                 for (int i = 0; i < groundTruth.length(); i++) {
-                    JSONObject trackNode = groundTruth.getJSONObject(i);
-                    int trackID = trackNode.getInt("trackID");
-                    JSONArray posvel = trackNode.getJSONArray("posvel");
+                    JSONArray trackNode = groundTruth.getJSONArray(i);
+                    int trackID = trackNode.getInt(0);
+                    JSONArray posvel = trackNode.getJSONArray(1);
                     double x = posvel.getDouble(0);
                     double y = posvel.getDouble(1);
 
@@ -372,10 +372,10 @@ public class App implements GlimpseLayoutProvider {
                 for (int i = 0; i < particles.length(); i++) {
                     JSONArray particle = particles.getJSONArray(i);
                     for (int j = 0; j < particle.length(); j++) {
-                        JSONObject trackNode = particle.getJSONObject(j);
+                        JSONArray trackNode = particle.getJSONArray(j);
                         JSONArray posvel;
                         try {
-                            JSONObject pv = trackNode.getJSONObject("posvel");
+                            JSONObject pv = trackNode.getJSONObject(1);
                             posvel = pv.getJSONArray("mean");
                             JSONArray pvCov = pv.getJSONArray("cov");
                             double xx = pvCov.getJSONArray(0).getDouble(0);
@@ -383,7 +383,7 @@ public class App implements GlimpseLayoutProvider {
                             double yy = pvCov.getJSONArray(1).getDouble(1);
                             particlesTrack.addUncertaintyEllipse(ellipsePainter, posvel.getDouble(0), posvel.getDouble(1), xx, xy, yy, time);
                         } catch (JSONException e) {
-                            posvel = trackNode.getJSONArray("posvel");
+                            posvel = trackNode.getJSONArray(1);
                         }
                         double x = posvel.getDouble(0);
                         double y = posvel.getDouble(1);

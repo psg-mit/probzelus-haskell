@@ -5,7 +5,10 @@
 {-# LANGUAGE TypeFamilies #-}
 
 
-module DSProg where
+module DSProg (
+  module DSProg,
+  Result
+) where
 
 import Prelude hiding ((<>))
 
@@ -20,13 +23,12 @@ import Control.Monad.Fix
 
 import Data.Aeson (ToJSON (toJSON))
 import Data.Maybe (isNothing, fromJust)
+import qualified Data.Map
 import Data.Proxy (Proxy (Proxy))
 
 import GHC.TypeLits
 
 import Numeric.LinearAlgebra.Static hiding (Gaussian, M)
-
-import System.Mem.Weak
 
 import Unsafe.Coerce (unsafeCoerce)
 
@@ -46,12 +48,6 @@ import Util.Ref
 import qualified Util.ZStream as ZS
 
 import Numeric.Log (Log (Exp))
-
-data Result a where
-  RConst :: a -> Result a
-  RMarginal :: MDistr a -> Result (MType a)
-
-deriving instance Show a => Show (Result a)
 
 instance ToJSON a => ToJSON (Result a) where
   toJSON (RConst x) = toJSON x
@@ -138,6 +134,11 @@ instance DeepForce e => DeepForce [e] where
   type Forced [e] = [Forced e]
   deepForce = mapM deepForce
   deepConst = map deepConst
+
+instance DeepForce e => DeepForce (Data.Map.Map k e) where
+  type Forced (Data.Map.Map k e) = Data.Map.Map k (Forced e)
+  deepForce = mapM deepForce
+  deepConst = fmap deepConst
 
 instance (DeepForce a, DeepForce b) => DeepForce (a, b) where
   type Forced (a, b) = (Forced a, Forced b)
@@ -315,14 +316,8 @@ marginal (Var (RefNodeToT nref)) = do
         isStale <- stale nref
         pure $ if isStale then Nothing else Just (RMarginal d)
       Initialized -> Just . RMarginal <$> initializedMarginal nref
-marginal (Plus x y) = do -- XXX: UNSOUND
-  mx <- marginal x
-  my <- marginal y
-  pure $ join (addResult <$> mx <*> my)
-marginal (Times x y) = do -- XXX: UNSOUND
-  mx <- marginal x
-  my <- marginal y
-  pure $ join (multResult <$> mx <*> my)
+marginal (Plus x y) = pure Nothing -- could do independence ananlysis, etc.
+marginal (Times x y) = pure Nothing -- could do independence ananlysis, etc.
 marginal (MVMul f x) = pure Nothing
 
 marginal' :: MonadState Heap m => Expr a -> m (Result a)

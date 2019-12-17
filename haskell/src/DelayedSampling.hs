@@ -10,12 +10,13 @@ import Prelude hiding ((<>))
 
 import Control.Exception.Base (assert)
 import Control.Monad (forM_, when)
+import Control.Monad.State (get, put)
 import Control.Monad.Trans (MonadIO, liftIO)
 import Control.Monad.Bayes.Class (MonadSample, MonadCond, MonadInfer)
 import Control.Monad.Bayes.Weighted
 import Control.Monad.Bayes.Sampler
 
-import Data.Aeson
+import Data.Aeson (ToJSON (..), object, (.=))
 import Data.List (delete)
 import Data.Maybe (isJust)
 import Data.Proxy
@@ -63,7 +64,6 @@ data MDistr (m :: MarginalT) where
   MBernoulli :: !Double -> MDistr MBernoulliT
   MMVGaussian :: forall (n :: Nat) (p :: Proxy n). KnownNat n => !(R n) -> !(Sym n) -> MDistr (MMVGaussianT p)
 
---deriving instance Eq (MDistr m)
 deriving instance Show (MDistr m)
 
 instance ToJSON (MDistr a) where
@@ -78,6 +78,12 @@ data CDistr (m :: MarginalT) (m' :: MarginalT) where
   CBernoulli :: CDistr MBetaT MBernoulliT
   MVAffineMeanGaussian :: forall (n :: Nat) (m :: Nat) (pn :: Proxy n) (pm :: Proxy m).
     (KnownNat n, KnownNat m) => (L m n) -> (R m) -> (Sym m) -> CDistr (MMVGaussianT pn) (MMVGaussianT pm)
+
+data Result a where
+  RConst :: a -> Result a
+  RMarginal :: MDistr a -> Result (MType a)
+
+deriving instance Show a => Show (Result a)
 
 gaussianConditioning :: Double -> Double -> Double -> Double -> (Double, Double)
 gaussianConditioning mu var obs obsvar = (mu', var')
@@ -97,13 +103,13 @@ ascend1 lr diff = go where
   go n x = let d = diff x in go (n - 1) (x + (lr * d))
 
 -- XXX: not sure that the factor amount is good
-solveLaplaceGaussian :: Double -> Double
+solveLaplaceGaussian :: MDistr MGaussianT
   -> (forall s. AD s (Tower Double) -> AD s (Tower Double))
   -> Double
   -> Int
-  -> (Double, Double, Double)
-solveLaplaceGaussian mu var likelihood learningRate numIters =
-  (mu', var', factorAmt - originalFactorAmt)
+  -> (MDistr MGaussianT, Double)
+solveLaplaceGaussian (MGaussian mu var) likelihood learningRate numIters =
+  (MGaussian mu' var', factorAmt - originalFactorAmt)
   where
   fmu' : _ : f''mu' : _ = diffs0 f mu'
   originalFactorAmt = log $ sqrt (pi / var) * exp (gaussian_ll' mu var mu)
@@ -357,6 +363,7 @@ prune nref = do
       prune c
     DelayedSampling.sample nref
 
+-- turns `nref` into a terminal node
 graft :: DelayedSampling m => MonadSample m => Ref (Node a b) -> m (MDistr b)
 graft nref = do
   n <- readRef nref
@@ -383,9 +390,16 @@ obs x n = do
   DelayedSampling.observe x n
 
 score :: DelayedSampling m => MonadInfer m => MType b -> Ref (Node a b) -> m Double
-score x n = do
+score x n = withoutModifying $ do
   graft n
   score' x n
+
+withoutModifying :: MonadState s m => m a -> m a
+withoutModifying f = do
+  s <- get
+  x <- f
+  put s
+  return x
 
 
 getValue :: DelayedSampling m => MonadSample m => Ref (Node a b) -> m (MType b)
@@ -420,12 +434,16 @@ forget nref = do
           modifyRef' cref $ \c ->
             c { distr = case distr c of
               UDistr d -> UDistr d
-              CDistr cdistr par -> case state c of
+              CDistr _ _ -> case state c of
                 Marginalized marg -> UDistr marg
                 _ -> error "forget" }
         case distr n of
           UDistr d -> pure ()
-          CDistr cdistr par -> error "forget: Shouldn't have parents?"
+          CDistr par cdistr -> do
+            isStale <- stale par
+            if isStale
+              then error "can't forget: information to incorporate"
+              else updateParent n $ \cdistr p -> pure $ p { children = delete (RefNodeFrom nref) (children p) }
         writeRef nref $ n { distr = UDistr marg }
   modifyRef' nref $ \n' -> n' { children = [] }
   freeRef nref
@@ -488,29 +506,23 @@ delay_iidADF useADF yobs = do
   x <- assumeConstant "x" (MGaussian 0 1)
   forM_ (zip [1..] yobs) $ \(t, obsyt) -> do
     if useADF
-      then observeGaussianMeanADFLaplace x (\mu -> gaussian_ll' mu 1 (auto obsyt)) 0.05 10000
+      then observeGeneric x $ \d -> solveLaplaceGaussian d (\mu -> gaussian_ll' mu 1 (auto obsyt)) 0.05 10000
       else observeConditional ("y" ++ show t) x (gaussianMeanGaussian 1) obsyt  -- normal(x, 1)
     printState x
   printValue x
 
-observeGaussianMeanADFLaplace :: DelayedInfer m =>
-      Ref (Node a MGaussianT)
-  -> (forall s. AD s (Tower Double) -> AD s (Tower Double))
-  -> Double
-  -> Int
-  -> m ()
-observeGaussianMeanADFLaplace nref likelihood learningRate numIters = do
-   graft nref
-   n <- readRef nref
-   case n of
-    RealizedNode x -> factor (diffs likelihood x !! 0)
+observeGeneric :: DelayedInfer m => Ref (Node a b) -> (MDistr b -> (MDistr b, Double)) -> m ()
+observeGeneric nref f = do
+  graft nref
+  n <- readRef nref
+  case n of
+    RealizedNode x -> error "observeGeneric: RealizedNode impossible"
     _ -> case state n of
-      Marginalized (MGaussian mu var) -> do
-        let (mu', var', factorAmt) = solveLaplaceGaussian mu var likelihood learningRate numIters
+      Marginalized d -> do
+        let (d', factorAmt) = f d
         factor factorAmt
-        writeRef nref $ n { state = Marginalized (MGaussian mu' var') }
-      _ -> error "observeGaussianMeanADFLaplace"
-
+        writeRef nref $ n { state = Marginalized d' }
+      _ -> error "observeGeneric"
 
 delay_kalman :: DelayedInfer m => MonadIO m =>
   Bool -> Double -> Double -> [Double] -> m ()

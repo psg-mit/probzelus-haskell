@@ -42,6 +42,7 @@ extra-deps:
 # -  ../../monad-bayes
 - git: https://github.com/psg-mit/monad-bayes.git
   commit: 015d189d68844f66a585a821684911be17cb2ac2
+- multiset-0.3.4.3@sha256:968192524bd38ffa29856e1e3f9f6f8a5704f98899d4b25f8ebd425001594f61
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

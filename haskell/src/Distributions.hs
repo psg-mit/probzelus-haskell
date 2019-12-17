@@ -6,6 +6,8 @@ import Control.Monad.Bayes.Class (MonadSample, MonadCond)
 import Numeric.SpecFunctions (logGamma)
 
 import qualified Data.Vector as V
+import qualified Data.Map as M
+import qualified Data.MultiSet as S
 
 import Numeric.Log (Log (Exp))
 
@@ -136,7 +138,11 @@ bernoulli01 p = Distr sam sco where
   sco _ = negInf
 
 categorical :: [Double] -> Distr Int
-categorical ps = Distr (B.categorical (V.fromList ps)) (\i -> ps !! i)
+categorical ps = Distr (B.categorical (V.fromList ps)) (\i -> log (ps !! i))
+
+categoricalM :: Ord a => M.Map a Double -> Distr a
+categoricalM ps = Distr (fmap (\i -> fst (M.elemAt i ps)) (B.categorical (V.fromList (M.elems ps))))
+  (\k -> log (ps M.! k))
 
 bernoulli_ll :: Floating a => a -> a -> a
 bernoulli_ll p b = b * log p + (1 - b) * log (1 - p)
@@ -214,6 +220,17 @@ data Some f where
 
 exponentialFamilies :: [Some ExpFam]
 exponentialFamilies = [Some betaEF, Some bernoulliEF, Some normalEF]
+
+shuffleWithRepeats' :: forall a. Ord a => M.Map a (Distr Int) -> Distr [a]
+shuffleWithRepeats' countDistrs = Distr sam sco where
+  sam :: MonadSample m => m [a]
+  sam = do
+    counts <- mapM sample countDistrs
+    randomlyInterleave [ replicate n k | (k, n) <- M.toList counts ]
+  sco :: [a] -> Double
+  sco idxes = let ns = mconcat [ S.singleton i | i <- idxes ] in
+    sum (M.mapWithKey (\k d -> score d (length (filter (== k) idxes))) countDistrs)
+    + randomlyInterleaveLogPDF (map snd (S.toOccurList ns))
 
 shuffleWithRepeats :: [Distr Int] -> Distr [Int]
 shuffleWithRepeats countDistrs = Distr sam sco where
