@@ -30,33 +30,10 @@ import qualified SymbolicDistr as DS
 import DelayedSampling (DelayedInfer)
 import DSProg (Forced (..))
 
-newtype Trace = Trace Dynamic -- type Trace = Map String Dynamic
-
-instance Semigroup Trace where
-  tx@(Trace x) <> ty@(Trace y) = if isNullTrace tx then ty
-    else if isNullTrace ty then tx else Trace (toDyn (x' <> y'))
-    where
-    x' = fromDyn x (error ("Trace <>" ++ show (x, y))) :: Map String Trace
-    y' = fromDyn y (error ("Trace <>" ++ show (x, y))) :: Map String Trace
-
-instance Monoid Trace where
-  mempty = Trace (toDyn (mempty :: Map String Trace))
+type Trace = Map String Dynamic
 
 newtype Weight = Weight (Log Double)
   deriving (Eq, Show, Ord)
-
-instance Show Trace where
-  show (Trace x) = case fromDynamic x of
-    Just (xd :: Bool) -> show xd
-    _ -> case fromDynamic x of
-      Just (xd :: Double) -> show xd
-      _ -> case fromDynamic x of
-        Just (xd :: Map String Trace) -> show (M.assocs xd)
-        _ -> case fromDynamic x of
-          Just (xd :: Trace) -> show xd
-          _ -> case fromDynamic x of
-            Just (xd :: [Trace]) -> show xd
-            _ -> show x
 
 deriving instance Num Weight
 
@@ -91,34 +68,34 @@ mkInf f = rwsT $ \obs () -> (\(x, t, w) -> (x, (), (t, Weight w))) <$> f obs
 (~~) :: Monad m => String -> Gen m a -> Gen m a
 (~~) k g = Gen (sim g) $
   withRWST (\t () -> (f t, ())) $
-  mapRWST (fmap (\(a, (), (t, w)) -> (a, (), (Trace (toDyn (M.singleton k t)), w)))) $
+  mapRWST (fmap (\(a, (), (t, w)) -> (a, (), (M.singleton k (toDyn t), w)))) $
   makeConstrainedGen g
   where
-  f (Trace t) = case M.lookup k =<< fromDynamic t of
+  f t = case M.lookup k t >>= fromDynamic of
         Just t' -> t'
         Nothing -> (mempty :: Trace)
 
 fromSamplerAndScorer :: Typeable a => Monad m => m a -> (a -> Double) -> Gen m a
-fromSamplerAndScorer sampler scorer = Gen sampler $ mkInf $ \(Trace obs) ->
-  case fromDynamic obs of
+fromSamplerAndScorer sampler scorer = Gen sampler $ mkInf $ \obs ->
+  case M.lookup "" obs >>= fromDynamic of
     Nothing -> sampled <$> fromSamplerAndScorer sampler scorer
-    Just x -> pure (x, Trace (toDyn x), Exp (scorer x))
+    Just x -> pure (x, M.singleton "" (toDyn x), Exp (scorer x))
   where
-  sampled x = (x, Trace (toDyn x), 1)
+  sampled x = (x, M.singleton "" (toDyn x), 1)
 
 
 prim :: MonadSample m => Typeable a => Distr a -> Gen m a
 prim d = fromSamplerAndScorer (D.sample d) (D.score d)
 
 dsPrim :: MonadState Heap m => MonadSample m => DeepForce a => Typeable a => Typeable (Forced a) => DS.Distr a -> Gen m a
-dsPrim d = Gen (DS.sample d) $ mkInf $ \(Trace obs) ->
-  case fromDynamic obs of
+dsPrim d = Gen (DS.sample d) $ mkInf $ \obs ->
+  case M.lookup "" obs >>= fromDynamic of
     Nothing -> sampled <$> dsPrim d
     Just x -> do
       ((), w) <- lift $ runWeighted $ (DS.observe d x)
-      pure (deepConst x, Trace (toDyn x), w)
+      pure (deepConst x, M.singleton "" (toDyn x), w)
   where
-  sampled x = (x, Trace (toDyn x), 1)
+  sampled x = (x, M.singleton "" (toDyn x), 1)
 
 simulate :: Functor m => Inf m a -> m (a, Trace, Log Double)
 simulate g = fmap (\(a, s, (t, Weight w)) -> (a, t, w)) $ runRWST g mempty ()
@@ -145,13 +122,13 @@ myGen = do
   pure (x, y, z)
 
 isNullTrace :: Trace -> Bool
-isNullTrace (Trace x) = case fromDynamic x of
-  Just (t :: Map String Trace) -> M.null t
-  _ -> False
+isNullTrace = M.null
 
 isequence :: Monad m => [Gen m a] -> Gen m [a]
-isequence xs = Gen (mapM sim xs) $ mkInf $ \tt@(Trace t) -> do
-  let ts = if isNullTrace tt then map (\_ -> mempty) xs else fromDyn t (error ("isequence " ++ show t))
+isequence xs = Gen (mapM sim xs) $ mkInf $ \t -> do
+  let ts = case M.lookup "" t >>= fromDynamic of
+         Just ts' -> ts'
+         _ -> map (\_ -> mempty) xs
   vals <- sequence (zipWith toInf xs ts)
   return ([ x | (x, _, _) <- vals], obs [ t | (_, t, _) <- vals], product [ p | (_, _, p) <- vals])
 
@@ -159,10 +136,10 @@ isequence xs = Gen (mapM sim xs) $ mkInf $ \tt@(Trace t) -> do
 
 infixr 7 |->
 (|->) :: String -> Trace -> Trace
-k |-> v = Trace (toDyn (M.singleton k v))
+k |-> v = M.singleton k (toDyn v)
 
 obs :: Typeable a => a -> Trace
-obs v = Trace (toDyn v)
+obs v = M.singleton "" (toDyn v)
 
 replicate :: Monad m => Int -> Gen m a -> Gen m [a]
 replicate n g = isequence (Prelude.replicate n g)
@@ -175,6 +152,14 @@ observing t g = do
   (x, t, ll) <- sim (toInf g t)
   factor ll
   pure x
+
+-- Inefficient due to Metaprob interface!
+observingWithProposal :: MonadCond m => Typeable b => Trace -> Gen m a -> String -> Gen m b -> m a
+observingWithProposal t p k q = do
+  (t', tq, _) <- sim (toInf q mempty)
+  (_, _, w) <- sim (toInf q tq)
+  factor (recip w)
+  observing (t <> k |-> obs t') p
 
 observing' :: Monad m => Trace -> Gen m a -> Weighted m a
 observing' t g = withWeight $ do

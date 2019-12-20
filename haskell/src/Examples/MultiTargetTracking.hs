@@ -101,25 +101,27 @@ sampleStep (allOldTracks, nextTrackID) = do
 observeStep :: DelayedInfer m => (TrackMap, Int) -> [R 2] -> m ((TrackMap, Int), [Expr (R 2)])
 observeStep (allOldTracks, nextTrackID) observations = do
   updatedOldTracks <- mapM (trackMotion tdiff) allOldTracks
-  assocs <- proposeAssocs observations updatedOldTracks
-  MP.observing ("assocs" |-> obs assocs <> "observations" |-> MP.trList observations)
-    (sampleStep (allOldTracks, nextTrackID))
+  -- assocs <- proposeAssocs observations updatedOldTracks
+  MP.observingWithProposal
+    ("observations" |-> MP.trList observations) (sampleStep (allOldTracks, nextTrackID))
+    "assocs" (proposeAssocs 0 observations updatedOldTracks)
 
-proposeAssocs :: DelayedInfer m => [R 2] -> TrackMap -> m [ObsType]
-proposeAssocs (obs : observations) remainingTracks = do
-  newTrack <- newTrackD
+
+
+proposeAssocs :: DelayedInfer m => Int -> [R 2] -> TrackMap -> Gen m [ObsType]
+proposeAssocs j (obs : observations) remainingTracks = do
+  newTrack <- lift $ newTrackD
   let distrs = M.singleton Clutter (clutterLambda, clutterDistr)
         <> M.singleton NewTrack (newTrackLambda, trackMeasurement newTrack)
         <> M.mapKeys Track (fmap (\t -> (survivalProb * pd, trackMeasurement t)) remainingTracks)
-  likes <- mapM (\(intensity, d) -> (\ll -> intensity * exp ll) <$> DS.score d obs) distrs
+  likes <- lift $ mapM (\(intensity, d) -> (\ll -> intensity * exp ll) <$> DS.score d obs) distrs
   let assocDistr = let probs = fmap (/ sum likes) likes in categoricalM probs
-  i <- sample assocDistr
-  factor (- score assocDistr i) -- proposal correction
+  i <- ("assoc" ++ show j) ~~ MP.prim assocDistr
   let remainingTracks' = case i of
         Track k -> M.delete k remainingTracks
         _ -> remainingTracks
-  (i :) <$> proposeAssocs observations remainingTracks'
-proposeAssocs [] remainingTracks = return []
+  (i :) <$> proposeAssocs (j + 1) observations remainingTracks'
+proposeAssocs _ [] remainingTracks = return []
 
 generateGroundTruth :: DelayedSample m => ZStream m () (TrackMap, [Expr (R 2)])
 generateGroundTruth = ZS.fromStep stepf initState where
