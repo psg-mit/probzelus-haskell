@@ -201,13 +201,13 @@ zstepGen = ZS.fromStep stepf initState
   stepf (t, tracks, numTracks, appearances) () = do
     (tracks', newNumTracks, appearances') <- lift (tracksMotion t tdiff tracks numTracks appearances)
     observations <- forM [0 .. numCameras - 1] $ \camID -> do
-      obs <- MP.at ("obs." ++ show camID) (MP.dsPrim (tracksMeasurement appearances' (filter (\t -> camera t == camID) tracks')))
+      obs <- ("obs." ++ show camID) MP.~~ MP.dsPrim (tracksMeasurement appearances' (filter (\t -> camera t == camID) tracks'))
       return [ (camID, pose, pvwh, obsAppear) | (pvwh, (pose, obsAppear)) <- obs ]
     return ((t + tdiff, tracks', newNumTracks, appearances'), (tracks', concat observations))
 
 processObservationsStream :: DelayedInfer m => ZStream m [(CameraID, R 10, R 4, R 1)] [MarginalTrack]
 processObservationsStream = proc observations -> do
-  (tracks', _) <- MP.zobserving zstepGen -< ((), MP.tr "obs" observations)
+  (tracks', _) <- MP.zobserving zstepGen -< ((), "obs" MP.|-> MP.obs observations)
   ZS.run -< mapM trackf tracks'
   where
   trackf :: DelayedInfer m => STrack -> m MarginalTrack

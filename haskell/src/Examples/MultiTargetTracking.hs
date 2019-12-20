@@ -19,8 +19,9 @@ import DSProg (DeepForce (..), Expr' (..), Expr, marginal, zdeepForce, deepForce
 import Distributions
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
-import Metaprob ((~~), Gen, lift)
+import Metaprob ((~~), Gen, lift, (|->), obs)
 import qualified Metaprob as MP
+import Examples.Demo (Sampler, Delayed, Weighted)
 
 data ObsType = Clutter | NewTrack | Track Int
   deriving (Eq, Show, Ord)
@@ -41,16 +42,13 @@ newTrackLambda = birthRate * tdiff
 pd = 0.8
 survivalProb = exp (- tdiff * deathRate)
 
-probMeasurement :: Distr Int
-probMeasurement = bernoulli01 (survivalProb * pd)
-
 clutterDistr :: DS.Distr (Expr (R 2))
 clutterDistr = DS.mvNormal (Const (0 :: R 2)) (10 * sym eye)
 
 newTrackD :: DelayedSample m => m (Expr (R 4))
 newTrackD = DS.sample (DS.mvNormal (Const mu) cov)
   where
-  mu = konst 0 :: R 4
+  mu = 0 :: R 4
   cov = sym (((5 * eye :: Sq 2) ||| (0 :: Sq 2))
             ===
             ((0 :: Sq 2) ||| (0.1 * eye :: Sq 2)))
@@ -98,13 +96,13 @@ sampleStep (allOldTracks, nextTrackID) = do
   where
   countDistrs = M.singleton Clutter (poisson clutterLambda)
              <> M.singleton NewTrack (poisson newTrackLambda)
-             <> M.mapKeys Track (fmap (\_ -> probMeasurement) allOldTracks)
+             <> M.mapKeys Track (fmap (\_ -> bernoulli01 (survivalProb * pd)) allOldTracks)
 
 observeStep :: DelayedInfer m => (TrackMap, Int) -> [R 2] -> m ((TrackMap, Int), [Expr (R 2)])
 observeStep (allOldTracks, nextTrackID) observations = do
   updatedOldTracks <- mapM (trackMotion tdiff) allOldTracks
   assocs <- proposeAssocs observations updatedOldTracks
-  MP.observing (MP.tr "assocs" assocs <> MP.trList "observations" observations)
+  MP.observing ("assocs" |-> obs assocs <> "observations" |-> MP.trList observations)
     (sampleStep (allOldTracks, nextTrackID))
 
 proposeAssocs :: DelayedInfer m => [R 2] -> TrackMap -> m [ObsType]
@@ -114,9 +112,9 @@ proposeAssocs (obs : observations) remainingTracks = do
         <> M.singleton NewTrack (newTrackLambda, trackMeasurement newTrack)
         <> M.mapKeys Track (fmap (\t -> (survivalProb * pd, trackMeasurement t)) remainingTracks)
   likes <- mapM (\(intensity, d) -> (\ll -> intensity * exp ll) <$> DS.score d obs) distrs
-  let probs = fmap (/ sum likes) likes
-  i <- sample (categoricalM probs)
-  factor (- score (categoricalM probs) i) -- proposal correction
+  let assocDistr = let probs = fmap (/ sum likes) likes in categoricalM probs
+  i <- sample assocDistr
+  factor (- score assocDistr i) -- proposal correction
   let remainingTracks' = case i of
         Track k -> M.delete k remainingTracks
         _ -> remainingTracks
@@ -138,7 +136,7 @@ processObservations = ZS.fromStep stepf initState where
     marginalTracks <- mapM (fmap fromJust . marginal) tracks'
     return (newState, marginalTracks)
 
-runMTTPF :: MonadSample m => Int -> ZStream m () ([(Int, R 4)], [[(Int, Result (R 4))]], [R 2])
+runMTTPF :: Int -> ZStream Sampler () ([(Int, R 4)], [[(Int, Result (R 4))]], [R 2])
 runMTTPF numParticles = proc () -> do
   (groundTruth, obs) <- zdeepForce generateGroundTruth -< ()
   particles <- zdsparticles numParticles processObservations -< obs

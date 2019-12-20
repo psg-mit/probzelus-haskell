@@ -1,11 +1,15 @@
 {-# LANGUAGE Arrows, FlexibleContexts #-}
 
-module Examples.Demo where
+module Examples.Demo (
+  module Examples.Demo,
+  Weighted
+) where
 
 import Control.Monad (replicateM)
 import Control.Monad.Bayes.Weighted (Weighted, runWeighted)
+import Control.Monad.Bayes.Sampler (SamplerIO, sampleIO)
 import Control.Monad.Bayes.Class (MonadSample, MonadCond)
-import Control.Monad.State (StateT)
+import Control.Monad.State (StateT, MonadFix)
 import Control.Monad.Trans (lift)
 
 import qualified Distributions as D
@@ -17,22 +21,24 @@ import Numeric.Log (Log (Exp))
 
 import Inference (zparticles, zdsparticles', zdsparticles)
 import qualified Metaprob as G
-import Metaprob (Gen)
+import Metaprob (Gen, (~~))
 
 import qualified Util.ZStream as ZS
 import Util.ZStream (ZStream)
 
-import DelayedSampling (DelayedSampling)
+import DelayedSampling (DelayedSampling, DelayedSample, DelayedInfer)
 import qualified SymbolicDistr as DS
 import DSProg (M, Expr, Expr' (..), marginal', Result, meanResult, zdeepForce)
 import Util.Ref (Heap)
 
 
-type Sampler = RVar
+type Sampler = SamplerIO
 type Delayed = StateT Heap
+type Delayed' s = StateT Heap
+
 
 sampleProb :: Sampler a -> IO a
-sampleProb x = runRVar x StdRandom
+sampleProb = sampleIO
 
 weightedSample :: Weighted Sampler a -> IO (a, Double)
 weightedSample = sampleProb . fmap ((\(x, Exp w) -> (x, w))) . runWeighted
@@ -40,7 +46,7 @@ weightedSample = sampleProb . fmap ((\(x, Exp w) -> (x, w))) . runWeighted
 unLog :: Log Double -> Double
 unLog (Exp x) = exp x
 
-importanceSamplingExpectation :: Int -> Weighted Sampler Double -> RVar Double
+importanceSamplingExpectation :: Int -> Weighted Sampler Double -> Sampler Double
 importanceSamplingExpectation n w = do
   xs <- replicateM n (runWeighted w)
   pure (sum [ unLog w * x | (x, w) <- xs] / sum [ unLog w | (x, w) <- xs] )
@@ -85,11 +91,11 @@ biasedAllHeadsPosteriorImportanceSampler = lift biasedAllHeadsPosterior
 
 -- Of course, the variance estimating the mean probability is lower with the exact posterior
 
-biasedAllHeadsImportanceSamplingVariance :: RVar Double
+biasedAllHeadsImportanceSamplingVariance :: Sampler Double
 biasedAllHeadsImportanceSamplingVariance =
   sampleVariance 1000 (importanceSamplingExpectation 10 biasedAllHeads)
 
-biasedAllHeadsExactPosteriorSamplingVariance :: RVar Double
+biasedAllHeadsExactPosteriorSamplingVariance :: Sampler Double
 biasedAllHeadsExactPosteriorSamplingVariance =
   sampleVariance 1000 (importanceSamplingExpectation 10 biasedAllHeadsPosteriorImportanceSampler)
 
@@ -131,12 +137,12 @@ isCoinFairImproved = do
 
 biasedCoinflipsGen :: Gen Sampler Double
 biasedCoinflipsGen = do
-  pr <- G.at "pr" (G.prim (D.beta 0.5 0.5))
-  G.at "obs" (G.replicate 5 (G.prim (D.bernoulli pr)))
+  pr <- "pr" ~~ (G.prim (D.beta 0.5 0.5))
+  "obs" ~~ (G.replicate 5 (G.prim (D.bernoulli pr)))
   return pr
 
 biasedCoinflipsGenAllHeads :: Weighted Sampler Double
-biasedCoinflipsGenAllHeads = G.observing' (G.trList "obs" (replicate 5 True)) biasedCoinflipsGen
+biasedCoinflipsGenAllHeads = G.observing' ("obs" G.|-> G.trList (replicate 5 True)) biasedCoinflipsGen
 
 
 
@@ -151,7 +157,7 @@ delay init = ZS.fromStep (\last current -> return (current, last)) init
 integrate :: Monad m => Double -> ZStream m Double Double
 integrate init = ZS.fromStep (\currentSum toAdd -> let newSum = currentSum + toAdd in return (newSum, newSum)) init
 
-fibonacci :: ZStream IO () Double
+fibonacci :: MonadFix m => ZStream m () Double
 fibonacci = proc () -> do
   rec n <- ZS.returnA -< n' + n''
       n' <- delay 1 -< n
@@ -165,8 +171,8 @@ triangular_numbers = proc () -> do
 
 -- Discrete time analogue of Ito processes
 noisyIntegrate :: Double -> ZStream Sampler (Double, Double) Double
-noisyIntegrate = ZS.fromStep $ \currentSum (mean, stdDev) -> do
-    newSum <- D.sample (D.normal (currentSum + mean) stdDev)
+noisyIntegrate = ZS.fromStep $ \currentSum (mean, var) -> do
+    newSum <- D.sample (D.normal (currentSum + mean) var)
     pure (newSum, newSum)
 
 kalman1D :: ZStream Sampler () Double
@@ -174,15 +180,21 @@ kalman1D = proc () -> do
   actualPosition <- noisyIntegrate 0 -< (0, 1)
   ZS.zconstM (\x -> D.sample (D.normal x 3)) -< actualPosition
 
+-- Discrete time analogue of Ito processes
+noisyIntegrateGen :: Double -> ZStream (Gen Sampler) (Double, Double) Double
+noisyIntegrateGen = ZS.fromStep $ \currentSum (mean, var) -> do
+    newSum <- G.normal (currentSum + mean) var
+    pure (newSum, newSum)
+
 kalman1DGen :: ZStream (Gen Sampler) () (Double, Double)
 kalman1DGen = proc () -> do
-  actualPosition <- ZS.lift (noisyIntegrate 0) -< (0, 1)
-  observedPosition <- ZS.zconstM (\x -> G.at "obs" (G.prim (D.normal x 3))) -< actualPosition
+  actualPosition <- ZS.liftM ("x" ~~) (noisyIntegrateGen 0) -< (0, 1)
+  observedPosition <- ZS.liftM ("obs" ~~) (ZS.always (\x -> G.prim (D.normal x 3))) -< actualPosition
   ZS.returnA -< (actualPosition, observedPosition)
 
 kalman1DObserved :: ZStream (Weighted Sampler) Double Double
 kalman1DObserved = proc obs -> do
-  (actualPosition, observedPosition) <- G.zobserving' kalman1DGen -< ((), G.tr "obs" obs)
+  (actualPosition, observedPosition) <- G.zobserving' kalman1DGen -< ((), "obs" G.|-> G.obs obs)
   ZS.returnA -< actualPosition
 
 kalman1DParticles :: Int -> ZStream Sampler Double [Double]
@@ -200,20 +212,20 @@ runKalman1DParticles = ZS.runStream print (ZS.liftM sampleProb kalman1DParticles
 
 -- Delayed sampling
 
-noisyIntegrateDelayed :: DelayedSampling m => MonadSample m => Expr Double -> ZStream m (Expr Double, Double) (Expr Double)
-noisyIntegrateDelayed = ZS.fromStep $ \currentSum (mean, stdDev) -> do
-    newSum <- DS.sample (DS.normal (currentSum + mean) stdDev)
+noisyIntegrateDelayed :: DelayedSample m => Expr Double -> ZStream m (Expr Double, Double) (Expr Double)
+noisyIntegrateDelayed = ZS.fromStep $ \currentSum (mean, var) -> do
+    newSum <- DS.sample (DS.normal (currentSum + mean) var)
     pure (newSum, newSum)
 
-kalman1DGenDelayed :: DelayedSampling m => MonadSample m => ZStream (Gen m) () (Expr Double, Expr Double)
+kalman1DGenDelayed :: DelayedSample m => ZStream (Gen m) () (Expr Double, Expr Double)
 kalman1DGenDelayed = proc () -> do
   actualPosition <- ZS.lift (noisyIntegrateDelayed (Const 0)) -< (Const 0, 1)
-  observedPosition <- ZS.zconstM (\x -> G.at "obs" (G.dsPrim (DS.normal x 3))) -< actualPosition
+  observedPosition <- ZS.zconstM (\x -> "obs" ~~ (G.dsPrim (DS.normal x 3))) -< actualPosition
   ZS.returnA -< (actualPosition, observedPosition)
 
-kalman1DObservedDelayed :: DelayedSampling m => MonadSample m => MonadCond m => ZStream m Double (Result Double)
+kalman1DObservedDelayed :: DelayedInfer m => ZStream m Double (Result Double)
 kalman1DObservedDelayed = proc obs -> do
-  (actualPosition, observedPosition) <- G.zobserving kalman1DGenDelayed -< ((), G.tr "obs" obs)
+  (actualPosition, observedPosition) <- G.zobserving kalman1DGenDelayed -< ((), "obs" G.|-> G.obs obs)
   ZS.run -< marginal' actualPosition
 
 -- Every particle will be identical, because everything is marginalized here

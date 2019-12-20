@@ -29,6 +29,9 @@ liftM f = fromStep (\(ZStream s) a -> f (s a))
 zconstM :: Functor f => (a -> f b) -> ZStream f a b
 zconstM f = ZStream $ \a -> (\x -> (zconstM f, x)) <$> f a
 
+always :: Functor f => (a -> f b) -> ZStream f a b
+always = zconstM
+
 zconst :: Applicative f => (a -> b) -> ZStream f a b
 zconst f = zconstM (pure . f)
 

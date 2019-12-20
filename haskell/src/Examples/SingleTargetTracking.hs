@@ -32,7 +32,7 @@ model delay = ZS.fromStep step initPosVel
   initPosVel = Const (konst 0 :: R 6)
   step posvel () = do
     posvel' <- lift (force (DS.sample (DS.mvNormal (MVMul (Const motionMatrix) posvel) motionCov)))
-    observation <- MP.at "obs" (MP.dsPrim (DS.mvNormal (MVMul (Const posFromPosVel) posvel') (10 * sym eye)))
+    observation <- "obs" MP.~~ (MP.dsPrim (DS.mvNormal (MVMul (Const posFromPosVel) posvel') (10 * sym eye)))
     return (posvel', (posvel', observation))
 
   force = if delay then id else (>>= deepForce')
@@ -55,7 +55,7 @@ model delay = ZS.fromStep step initPosVel
 
 processObservationStream :: DelayedInfer m => Bool -> ZStream m (R 3) (Result (R 6))
 processObservationStream delay = proc observations -> do
-  (posvel, _) <- MP.zobserving (model delay) -< ((), MP.tr "obs" observations)
+  (posvel, _) <- MP.zobserving (model delay) -< ((), "obs" MP.|-> MP.obs observations)
   ZS.run -< fromJust <$> marginal posvel
 
 runInference :: Bool -> Int -> ZStream SamplerIO () (R 6, [Result (R 6)], R 3)
