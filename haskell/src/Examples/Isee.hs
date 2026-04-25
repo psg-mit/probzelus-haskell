@@ -1,7 +1,7 @@
-{-# LANGUAGE Arrows, FlexibleContexts #-}
+{-# LANGUAGE Arrows, FlexibleContexts, ConstraintKinds #-}
 
-module Examples.Demo (
-  module Examples.Demo,
+module Examples.Isee (
+  module Examples.Isee,
   Weighted
 ) where
 
@@ -21,7 +21,7 @@ import Numeric.Log (Log (Exp))
 
 import Inference (zparticles, zdsparticles', zdsparticles)
 import qualified Metaprob as G
-import Metaprob (Gen, (~~))
+import Metaprob (Gen, (~~), (|->), Trace)
 
 import qualified Util.ZStream as ZS
 import Util.ZStream (ZStream)
@@ -33,6 +33,7 @@ import Util.Ref (Heap)
 
 
 type Sampler = SamplerIO
+type MSample = MonadSample
 type Delayed = StateT Heap
 type Delayed' s = StateT Heap
 
@@ -57,37 +58,37 @@ sampleVariance n d = do
   let mean = sum xs / fromIntegral n
   pure (sum [ (x - mean)^2 | x <- xs ] / fromIntegral n)
 
+sampleGen :: Gen Sampler a -> IO a
+sampleGen = sampleProb . G.sim
+
+sampleGenWithTrace :: Gen Sampler a -> IO (a, Trace)
+sampleGenWithTrace = sampleProb . G.sim . G.traced
 
 
 
+unbiasedCoinflip :: MSample m => Gen m Bool
+unbiasedCoinflip = "ht" ~~ G.bernoulli 0.5
 
 
+unbiasedCoinflips :: MSample m => Gen m [Bool]
+unbiasedCoinflips = G.replicate 5 unbiasedCoinflip
 
-
-
-
-unbiasedCoinflip :: Sampler Bool
-unbiasedCoinflip = D.sample (D.bernoulli 0.5)
-
-unbiasedCoinflips :: Sampler [Bool]
-unbiasedCoinflips = replicateM 5 unbiasedCoinflip
-
-biasedCoinflips :: Sampler [Bool]
+biasedCoinflips :: MSample m => Gen m (Double, [Bool])
 biasedCoinflips = do
-  pr <- D.sample (D.beta 0.5 0.5)
-  replicateM 5 (D.sample (D.bernoulli pr))
+  pr <- "pr" ~~ G.beta 0.5 0.5
+  flips <- "flips" ~~ G.replicate 5 (G.bernoulli pr)
+  return (pr, flips)
 
-biasedAllHeads :: Weighted Sampler Double
+biasedAllHeads :: MSample m => Weighted m Double
 biasedAllHeads = do
-  pr <- D.sample (D.beta 0.5 0.5)
-  replicateM 5 (D.observe (D.bernoulli pr) True)
+  (pr, flips) <- G.observing ("flips" |-> G.list (replicate 5 True)) biasedCoinflips
   return pr
 
-biasedAllHeadsPosterior :: Sampler Double
-biasedAllHeadsPosterior = D.sample (D.beta 5.5 0.5)
+biasedAllHeadsPosterior :: MSample m => Gen m Double
+biasedAllHeadsPosterior = G.beta 5.5 0.5
 
 biasedAllHeadsPosteriorImportanceSampler :: Weighted Sampler Double
-biasedAllHeadsPosteriorImportanceSampler = lift biasedAllHeadsPosterior
+biasedAllHeadsPosteriorImportanceSampler = lift (G.sim biasedAllHeadsPosterior)
 
 -- Of course, the variance estimating the mean probability is lower with the exact posterior
 
@@ -104,45 +105,23 @@ unbiasedAllHeads = do
   replicateM 5 (D.observe (D.bernoulli 0.5) True)
   return 0.5
 
-isCoinFair :: Weighted Sampler (Bool, Double)
+isCoinFair :: MSample m => Gen m (Bool, Double, [Bool])
 isCoinFair = do
-  coinFair <- D.sample (D.bernoulli 0.7)
-  coinPr <- if coinFair
-    then unbiasedAllHeads
-    else biasedAllHeads
-  return (coinFair, coinPr)
-
--- This will think it is too likely that the coin is unfair
-isCoinFairBroken :: Weighted Sampler (Bool, Double)
-isCoinFairBroken = do
-  coinFair <- D.sample (D.bernoulli 0.7)
-  coinPr <- if coinFair
-    then unbiasedAllHeads
-    else lift biasedAllHeadsPosterior
-  return (coinFair, coinPr)
-
-
-biasedAllHeadsPosteriorAdjusted :: Weighted Sampler Double
-biasedAllHeadsPosteriorAdjusted = do
-  D.factor (D.logBeta 5.5 0.5 - D.logBeta 0.5 0.5)
-  D.sample (D.beta 5.5 0.5)
-
-isCoinFairImproved :: Weighted Sampler (Bool, Double)
-isCoinFairImproved = do
-    coinFair <- D.sample (D.bernoulli 0.7)
-    coinPr <- if coinFair
-      then unbiasedAllHeads
-      else biasedAllHeadsPosteriorAdjusted
-    return (coinFair, coinPr)
+  coinFair <- "fair" ~~ G.bernoulli 0.7
+  pr <- if coinFair
+    then return 0.5
+    else "pr" ~~ G.beta 0.5 0.5
+  flips <- "flips" ~~ G.replicate 5 (G.bernoulli pr)
+  return (coinFair, pr, flips)
 
 biasedCoinflipsGen :: Gen Sampler Double
 biasedCoinflipsGen = do
-  pr <- "pr" ~~ (G.prim (D.beta 0.5 0.5))
-  "obs" ~~ (G.replicate 5 (G.prim (D.bernoulli pr)))
+  pr <- "pr" ~~ G.beta 0.5 0.5
+  "obs" ~~ G.replicate 5 (G.bernoulli pr)
   return pr
 
 biasedCoinflipsGenAllHeads :: Weighted Sampler Double
-biasedCoinflipsGenAllHeads = G.observing' ("obs" G.|-> G.list (replicate 5 True)) biasedCoinflipsGen
+biasedCoinflipsGenAllHeads = G.observing' ("obs" |-> G.list (replicate 5 True)) biasedCoinflipsGen
 
 
 
@@ -171,8 +150,8 @@ triangular_numbers = proc () -> do
 
 -- Discrete time analogue of Ito processes
 noisyIntegrate :: Double -> ZStream Sampler (Double, Double) Double
-noisyIntegrate = ZS.fromStep $ \currentSum (mean, var) -> do
-    newSum <- D.sample (D.normal (currentSum + mean) var)
+noisyIntegrate = ZS.fromStep $ \currentSum (mean, stdDev) -> do
+    newSum <- D.sample (D.normal (currentSum + mean) stdDev)
     pure (newSum, newSum)
 
 kalman1D :: ZStream Sampler () Double
@@ -182,19 +161,19 @@ kalman1D = proc () -> do
 
 -- Discrete time analogue of Ito processes
 noisyIntegrateGen :: Double -> ZStream (Gen Sampler) (Double, Double) Double
-noisyIntegrateGen = ZS.fromStep $ \currentSum (mean, var) -> do
-    newSum <- G.normal (currentSum + mean) var
+noisyIntegrateGen = ZS.fromStep $ \currentSum (mean, stdDev) -> do
+    newSum <- G.normal (currentSum + mean) stdDev
     pure (newSum, newSum)
 
 kalman1DGen :: ZStream (Gen Sampler) () (Double, Double)
 kalman1DGen = proc () -> do
   actualPosition <- ZS.liftM ("x" ~~) (noisyIntegrateGen 0) -< (0, 1)
-  observedPosition <- ZS.liftM ("obs" ~~) (ZS.always (\x -> G.prim (D.normal x 3))) -< actualPosition
+  observedPosition <- ZS.liftM ("obs" ~~) (ZS.always (\x -> G.normal x 3)) -< actualPosition
   ZS.returnA -< (actualPosition, observedPosition)
 
 kalman1DObserved :: ZStream (Weighted Sampler) Double Double
 kalman1DObserved = proc obs -> do
-  (actualPosition, observedPosition) <- G.zobserving' kalman1DGen -< ((), "obs" G.|-> G.atom obs)
+  (actualPosition, observedPosition) <- G.zobserving' kalman1DGen -< ((), "obs" |-> G.atom obs)
   ZS.returnA -< actualPosition
 
 kalman1DParticles :: Int -> ZStream Sampler Double [Double]
@@ -213,8 +192,8 @@ runKalman1DParticles = ZS.runStream print (ZS.liftM sampleProb kalman1DParticles
 -- Delayed sampling
 
 noisyIntegrateDelayed :: DelayedSample m => Expr Double -> ZStream m (Expr Double, Double) (Expr Double)
-noisyIntegrateDelayed = ZS.fromStep $ \currentSum (mean, var) -> do
-    newSum <- DS.sample (DS.normal (currentSum + mean) var)
+noisyIntegrateDelayed = ZS.fromStep $ \currentSum (mean, stdDev) -> do
+    newSum <- DS.sample (DS.normal (currentSum + mean) stdDev)
     pure (newSum, newSum)
 
 kalman1DGenDelayed :: DelayedSample m => ZStream (Gen m) () (Expr Double, Expr Double)
@@ -225,7 +204,7 @@ kalman1DGenDelayed = proc () -> do
 
 kalman1DObservedDelayed :: DelayedInfer m => ZStream m Double (Result Double)
 kalman1DObservedDelayed = proc obs -> do
-  (actualPosition, observedPosition) <- G.zobserving kalman1DGenDelayed -< ((), "obs" G.|-> G.atom obs)
+  (actualPosition, observedPosition) <- G.zobserving kalman1DGenDelayed -< ((), "obs" |-> G.atom obs)
   ZS.run -< marginal' actualPosition
 
 -- Every particle will be identical, because everything is marginalized here
@@ -246,4 +225,4 @@ comparison = proc () -> do
   (actualPosition, observedPosition) <- ZS.liftM G.sim kalman1DGen -< ()
   particles <- kalman1DParticles 10 -< observedPosition
   delayedParticles <- kalman1DParticlesDelayed -< observedPosition
-  ZS.returnA -< (actualPosition, average particles, average (map meanResult delayedParticles))
+  ZS.returnA -< (actualPosition, average particles - actualPosition, average (map meanResult delayedParticles) - actualPosition)

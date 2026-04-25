@@ -1,8 +1,12 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
 
+{-| A Haskell model of the Metaprob interface.
+-}
+
 module Metaprob (
   module Metaprob,
+  module Util.Trace,
   lift
 ) where
 
@@ -25,12 +29,11 @@ import Util.RandomUtil
 import Util.Ref (Heap)
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
+import Util.Trace
 
 import qualified SymbolicDistr as DS
 import DelayedSampling (DelayedInfer)
 import DSProg (Forced (..))
-
-type Trace = Map String Dynamic
 
 newtype Weight = Weight (Log Double)
   deriving (Eq, Show, Ord)
@@ -121,31 +124,16 @@ myGen = do
   z <- "myInf" ~~ myInf
   pure (x, y, z)
 
-isNullTrace :: Trace -> Bool
-isNullTrace = M.null
-
 isequence :: Monad m => [Gen m a] -> Gen m [a]
 isequence xs = Gen (mapM sim xs) $ mkInf $ \t -> do
   let ts = case M.lookup "" t >>= fromDynamic of
          Just ts' -> ts'
          _ -> map (\_ -> mempty) xs
   vals <- sequence (zipWith toInf xs ts)
-  return ([ x | (x, _, _) <- vals], obs [ t | (_, t, _) <- vals], product [ p | (_, _, p) <- vals])
-
--- sequence [ at ("." ++ show i) x | (i, x) <- zip [0..] xs ]
-
-infixr 7 |->
-(|->) :: String -> Trace -> Trace
-k |-> v = M.singleton k (toDyn v)
-
-obs :: Typeable a => a -> Trace
-obs v = M.singleton "" (toDyn v)
+  return ([ x | (x, _, _) <- vals], atom [ t | (_, t, _) <- vals], product [ p | (_, _, p) <- vals])
 
 replicate :: Monad m => Int -> Gen m a -> Gen m [a]
 replicate n g = isequence (Prelude.replicate n g)
-
-trList :: Typeable a => [a] -> Trace
-trList xs = obs (map obs xs)
 
 observing :: MonadCond m => Trace -> Gen m a -> m a
 observing t g = do
@@ -159,7 +147,7 @@ observingWithProposal t p k q = do
   (t', tq, _) <- sim (toInf q mempty)
   (_, _, w) <- sim (toInf q tq)
   factor (recip w)
-  observing (t <> k |-> obs t') p
+  observing (t <> k |-> atom t') p
 
 observing' :: Monad m => Trace -> Gen m a -> Weighted m a
 observing' t g = withWeight $ do
@@ -186,6 +174,8 @@ exactly x = prim (D.dirac x)
 
 exactly' :: MonadSample m => Typeable a => a -> Gen m a
 exactly' x = fromSamplerAndScorer (pure x) (error "Can't score")
+
+
 
 normal :: MonadSample m => Double -> Double -> Gen m Double
 normal mu var = prim (D.normal mu var)

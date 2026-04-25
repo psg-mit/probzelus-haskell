@@ -45,9 +45,7 @@ instance MonadSample m => MonadSample (MStream m p) where
 instance MonadCond m => MonadCond (MStream m p) where
   score = MS.lift . score
 
--- lift :: Functor m => m a -> Weighted m a
--- lift x = lift
-
+catFromList' :: [(a, Double)] -> Cat.Categorical Double a
 catFromList' = Cat.fromList . map (\(x, w) -> (w, x))
 
 resample :: [(a, Weight)] -> RVar [a]

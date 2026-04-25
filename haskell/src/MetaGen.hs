@@ -18,7 +18,8 @@ import qualified Distributions as D
 
 import Numeric.Log (Log (Exp, ln))
 
-type Trace = Map String Dynamic
+import Util.Trace as T
+
 
 newtype Weight = Weight (Log Double)
   deriving (Eq, Show, Ord)
@@ -184,14 +185,8 @@ propose_with_density_estimate p obs q = do
 split_proposed_and_aux :: Gen m a -> Trace -> Trace -> (Trace, Trace)
 split_proposed_and_aux model obst proposedt =
   let (_, t, _) = logpdf_retval_and_trace model (obst `M.union` proposedt) in
-  let onlyProposedt = t `traceMinus` obst in
-  (onlyProposedt, proposedt `traceMinus` t)
-
-traceMinus :: Trace -> Trace -> Trace
-traceMinus t toRemove = M.withoutKeys t (M.keysSet toRemove)
-
-(!) :: Typeable a => Trace -> String -> a
-t ! k = fromMaybe (error "trace value of incorrect type") $ fromDynamic (t M.! k)
+  let onlyProposedt = t `T.minus` obst in
+  (onlyProposedt, proposedt `T.minus` t)
 
 rejection :: MonadSample m => Gen m a -> (Trace -> Bool) -> Gen m Trace
 rejection p condition = go 0 where

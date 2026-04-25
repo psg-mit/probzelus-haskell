@@ -19,7 +19,7 @@ import DSProg (DeepForce (..), Expr' (..), Expr, marginal, zdeepForce, deepForce
 import Distributions
 import Util.ZStream (ZStream)
 import qualified Util.ZStream as ZS
-import Metaprob ((~~), Gen, lift, (|->), obs)
+import Metaprob ((~~), Gen, lift, (|->), atom)
 import qualified Metaprob as MP
 import Examples.Demo (Sampler, Delayed, Weighted)
 
@@ -101,9 +101,8 @@ sampleStep (allOldTracks, nextTrackID) = do
 observeStep :: DelayedInfer m => (TrackMap, Int) -> [R 2] -> m ((TrackMap, Int), [Expr (R 2)])
 observeStep (allOldTracks, nextTrackID) observations = do
   updatedOldTracks <- mapM (trackMotion tdiff) allOldTracks
-  -- assocs <- proposeAssocs observations updatedOldTracks
   MP.observingWithProposal
-    ("observations" |-> MP.trList observations) (sampleStep (allOldTracks, nextTrackID))
+    ("observations" |-> MP.list observations) (sampleStep (allOldTracks, nextTrackID))
     "assocs" (proposeAssocs 0 observations updatedOldTracks)
 
 

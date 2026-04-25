@@ -207,7 +207,7 @@ zstepGen = ZS.fromStep stepf initState
 
 processObservationsStream :: DelayedInfer m => ZStream m [(CameraID, R 10, R 4, R 1)] [MarginalTrack]
 processObservationsStream = proc observations -> do
-  (tracks', _) <- MP.zobserving zstepGen -< ((), "obs" MP.|-> MP.obs observations)
+  (tracks', _) <- MP.zobserving zstepGen -< ((), "obs" MP.|-> MP.atom observations)
   ZS.run -< mapM trackf tracks'
   where
   trackf :: DelayedInfer m => STrack -> m MarginalTrack

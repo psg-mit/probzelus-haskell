@@ -2,14 +2,14 @@ module Util.Numeric where
 
 import Control.Arrow (second)
 import Numeric.Log
-import Numeric.SpecFunctions (logGamma)
+import qualified Numeric.SpecFunctions as SF
 
-average :: Fractional a => [a] -> a
+average :: Fractional r => [r] -> r
 average = go 0 0 where
   go n x [] = x / fromIntegral n
   go n x (z : zs) = go (n + 1) (x + z) zs
 
-shiftByMax :: (Precise d, RealFloat d, Ord d) => [(a, Log d)] -> [(a, Log d)]
+shiftByMax :: (Precise r, RealFloat r, Ord r) => [(a, Log r)] -> [(a, Log r)]
 shiftByMax xs = map (second (/ x')) xs
   where x' = maximum $ map snd xs
 
@@ -26,5 +26,11 @@ weightedAverageGeneric scale zero plus = go 0 zero where
   go w x [] = scale (recip w) x
   go w x ((y, ll) : ys) = go (w + ll) (scale ll y `plus` x) ys
 
-logFact :: Int -> Double
+logFact :: StatNum r => Int -> r
 logFact n = logGamma (fromIntegral (n + 1))
+
+class (Precise r, RealFloat r) => StatNum r where
+  logGamma :: r -> r
+
+instance StatNum Double where
+  logGamma = SF.logGamma

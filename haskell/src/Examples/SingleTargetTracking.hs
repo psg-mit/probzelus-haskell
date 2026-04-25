@@ -55,7 +55,7 @@ model delay = ZS.fromStep step initPosVel
 
 processObservationStream :: DelayedInfer m => Bool -> ZStream m (R 3) (Result (R 6))
 processObservationStream delay = proc observations -> do
-  (posvel, _) <- MP.zobserving (model delay) -< ((), "obs" MP.|-> MP.obs observations)
+  (posvel, _) <- MP.zobserving (model delay) -< ((), "obs" MP.|-> MP.atom observations)
   ZS.run -< fromJust <$> marginal posvel
 
 runInference :: Bool -> Int -> ZStream SamplerIO () (R 6, [Result (R 6)], R 3)
